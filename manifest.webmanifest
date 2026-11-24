@@ -1,0 +1,15 @@
+{
+  "name": "Antipolo Philippines Stake – Presidency Portal",
+  "short_name": "AP Stake",
+  "description": "Stake Presidency Portal for the Antipolo Philippines Stake.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#071a2c",
+  "theme_color": "#071a2c",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
