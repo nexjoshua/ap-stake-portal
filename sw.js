@@ -1,5 +1,5 @@
 /* AP Stake Portal – app helper (offline shell only; never stores portal data) */
-const CACHE = 'apstake-v1';
+const CACHE = 'apstake-v2';   // change this number whenever you upload new files
 const SHELL = ['./', './index.html', './styles.css', './app.js', './favicon.svg',
                './icon-192.png', './icon-512.png', './manifest.webmanifest'];
 
@@ -22,6 +22,6 @@ self.addEventListener('fetch', e => {
   e.respondWith(
     fetch(req)
       .then(res => { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); return res; })
-      .catch(() => caches.match(req).then(r => r || caches.match('./index.html')))
+      .catch(() => caches.match(req, { ignoreSearch: true }).then(r => r || caches.match('./index.html')))
   );
 });
