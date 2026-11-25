@@ -25,7 +25,7 @@ const WARD_NAMES = {
 };
 
 /* ---------- Basics ---------- */
-const S = { token:null, data:null, page:'home',
+const S = { token:null, data:null, page:'home', spkExtra:[],
   f:{ q:'', who:'', status:'open' }, cf:{ q:'', view:'open', kind:'' }, af:{ q:'', sp:'' } };
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -41,7 +41,8 @@ const main = h => { $('#main').innerHTML = h; };
 const wardLabel = w => WARD_NAMES[w] ? `${w} · ${WARD_NAMES[w]}` : (w || '');
 // "SI1" and "S1" are the same ward
 const unitKey = u => String(u || '').toUpperCase().replace(/\s+/g, '').replace(/^SI(\d+)$/, 'S$1');
-const unitFor = w => ((S.data && S.data.units && S.data.units.list) || []).find(u => u.key === unitKey(w));
+const unitList = () => (S.data && S.data.units && S.data.units.list) || [];
+const unitFor = w => unitList().find(u => u.key === unitKey(w));
 // "Acosta, Jacquiri Joy" → "Jacquiri Acosta" (for initials)
 const hcShort = n => { const [s, g] = String(n || '').split(','); return g ? g.trim().split(/\s+/)[0] + ' ' + s.trim() : String(n || ''); };
 
@@ -53,6 +54,7 @@ const parseD = s => { const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/
 const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const addDays = (s, n) => { const d = parseD(s); d.setDate(d.getDate() + n); return iso(d); };
 const fmtD = (s, o) => { const d = parseD(s); return d ? d.toLocaleDateString('en-US', o || { weekday:'short', month:'short', day:'numeric' }) : ''; };
+const LONG = { weekday:'long', month:'long', day:'numeric', year:'numeric' };
 const to12 = t => { if (!t) return ''; let [h, m] = t.split(':').map(Number); const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return `${h}:${String(m).padStart(2, '0')} ${ap}`; };
 const to24 = t => { const m = String(t || '').match(/(\d{1,2}):(\d{2})\s*([AP]M)/i); if (!m) return ''; let h = +m[1] % 12; if (/p/i.test(m[3])) h += 12; return `${String(h).padStart(2, '0')}:${m[2]}`; };
 const byWhen = (a, b) => { const A = a['Scheduled date'] || '9999', B = b['Scheduled date'] || '9999';
@@ -71,6 +73,7 @@ const I = {
   int:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18M9 15l2 2 4-4"/>',
   calling:'<circle cx="10" cy="8" r="4"/><path d="M3 21a7 7 0 0 1 14 0M16 11l2 2 4-4"/>',
   units:'<path d="M3 21h18M5 21V9l7-5 7 5v12M9 21v-6h6v6"/>',
+  spk:'<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8"/>',
   asg:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h4"/>',
   ppl:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 6"/>',
   user:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
@@ -90,6 +93,7 @@ const PAGES = [
   { id:'int', label:'Interviews', icon:'int' },
   { id:'cal', label:'Callings & releases', icon:'calling' },
   { id:'units', label:'High council & units', icon:'units', need:'units' },
+  { id:'spk', label:'Speaking assignments', icon:'spk', need:'speaking' },
   { id:'asg', label:'Assignments', icon:'asg', need:'assignments' },
   { id:'ppl', label:'People & logins', icon:'ppl', admin:true },
   { id:'acct', label:'My account', icon:'user' }
@@ -125,13 +129,16 @@ async function run(fn, ...args) {
 async function api(action, payload) {
   const r = await run('api', S.token, action, payload || {});
   if (r && r.error === 'SESSION_EXPIRED') { signOut(true); throw new Error('Your session ended. Please sign in again.'); }
-  if (r && r.error) throw new Error(r.error);
+  if (r && r.error) {
+    if (/^Unknown action/.test(r.error)) throw new Error('The backend is out of date. In Apps Script, deploy a new version.');
+    throw new Error(r.error);
+  }
   if (r && r.me) { S.data = r; render(); }
   return r;
 }
-function toast(m, bad) {
+function toast(m, bad, ms) {
   const t = $('#toast'); t.textContent = m; t.className = 'toast show' + (bad ? ' bad' : '');
-  clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', 3200);
+  clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', ms || (bad ? 6000 : 3200));
 }
 function twoStep(btn, fn) {
   if (btn.dataset.armed) { delete btn.dataset.armed; return fn(); }
@@ -168,16 +175,17 @@ function render() {
   $('#meName').textContent = me.name; $('#meRole').textContent = ROLE[me.role] || '';
   paintAv($('#meAv'), me.name, me.photo);
   paintAv($('#meAvMini'), me.name, me.photo);
-  ({ home:pHome, ann:pAnn, int:pInt, cal:pCal, units:pUnits, asg:pAsg, ppl:pPpl, acct:pAcct })[S.page]();
+  ({ home:pHome, ann:pAnn, int:pInt, cal:pCal, units:pUnits, spk:pSpk, asg:pAsg, ppl:pPpl, acct:pAcct })[S.page]();
 }
 function go(p) { S.page = p; closeMenu(); render(); window.scrollTo(0, 0); }
 
 /* ---------- Generic form dialog ---------- */
+// extra: one { label, fn } or a list of them (shown as red buttons on the left, each needs two clicks)
 function openForm(title, body, onSave, extra) {
-  const dlg = $('#dlg');
+  const dlg = $('#dlg'), extras = extra ? [].concat(extra) : [];
   dlg.innerHTML = `<form class="dlg"><header><h2>${esc(title)}</h2><button type="button" class="x" data-close aria-label="Close">×</button></header>
     <div class="body">${body}<p class="err" id="fErr"></p></div>
-    <footer>${extra ? `<button type="button" class="btn danger-t" id="fExtra">${esc(extra.label)}</button>` : ''}
+    <footer>${extras.map((x, i) => `<button type="button" class="btn danger-t" data-extra="${i}">${esc(x.label)}</button>`).join('')}
     <span class="grow"></span><button type="button" class="btn" data-close>Close</button><button class="btn pri" id="fSave">Save</button></footer></form>`;
   const form = dlg.querySelector('form');
   dlg.querySelectorAll('[data-close]').forEach(b => b.onclick = () => dlg.close());
@@ -185,15 +193,25 @@ function openForm(title, body, onSave, extra) {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(form));
     form.querySelectorAll('input[type=checkbox][name]').forEach(c => f[c.name] = c.checked);
-    guard($('#fSave'), () => onSave(f));
+    guard(() => onSave(f));
   };
-  if (extra) $('#fExtra').onclick = e => twoStep(e.currentTarget, () => guard($('#fExtra'), extra.fn));
+  dlg.querySelectorAll('[data-extra]').forEach(b =>
+    b.onclick = e => twoStep(e.currentTarget, () => guard(extras[+b.dataset.extra].fn)));
   dlg.showModal();
   addPwToggles(dlg);
 }
-async function guard(btn, fn) {
-  btn.disabled = true; $('#fErr').textContent = '';
-  try { await fn(); $('#dlg').close(); } catch (e) { $('#fErr').textContent = e.message; } finally { btn.disabled = false; }
+// Closes the pop-up right away and saves in the background.
+// If saving fails, the same pop-up (with what was typed) comes back with the error.
+async function guard(fn) {
+  const dlg = $('#dlg'), form = dlg.querySelector('form');
+  $('#fErr').textContent = '';
+  dlg.close();
+  toast('Saving…', false, 60000);
+  try { await fn(); }
+  catch (e) {
+    toast(e.message, true);
+    if (!dlg.open && dlg.querySelector('form') === form) { $('#fErr').textContent = e.message; dlg.showModal(); }
+  }
 }
 
 /* ---------- HOME ---------- */
@@ -207,7 +225,10 @@ function pHome() {
   const noIv = open.filter(i => !i.Interviewer);
   const calOpenList = C().rows.filter(calOpen);
   const myCal = all ? calOpenList : calOpenList.filter(mineCal);
-  const myUnit = me.interviewer && ((d.units && d.units.list) || []).find(u => u.interviewer === me.interviewer);
+  const myUnit = me.interviewer && unitList().find(u => u.interviewer === me.interviewer);
+  const mySpk = me.interviewer && d.speaking ? d.speaking.rows.filter(r => r.Speaker === me.interviewer && r.Date >= today)
+    .sort((a, b) => a.Date.localeCompare(b.Date))[0] : null;
+  const spkUnit = mySpk && unitFor(mySpk.Ward);
   const stats = admin ? [
     ['To schedule', open.filter(i => i.Status === 'To Schedule').length, 'warn'],
     ['Needs an interviewer', noIv.length + calOpenList.filter(c => !c.Interviewer).length, 'bad'],
@@ -228,8 +249,10 @@ function pHome() {
   const item = i => `<li class="item"><div class="when"><b>${fmtD(i['Scheduled date'], { day:'numeric' })}</b><span>${fmtD(i['Scheduled date'], { month:'short' })}</span></div>
     <div class="grow"><div class="t">${esc(i.Name)}</div><div class="sub">${esc(i.Type)} · ${esc(i.Ward)} · ${esc(i.Time || 'Time TBD')}${i.Venue ? ' · ' + esc(i.Venue) : ''}</div></div>
     <div class="sub r">${esc(i.Interviewer || 'Unassigned')}</div></li>`;
-  main(`<div class="head"><div><p class="eyebrow">${fmtD(today, { weekday:'long', month:'long', day:'numeric', year:'numeric' })}</p><h1>${greet}, ${esc(me.name)}</h1>
-    ${myUnit ? `<p class="muted">Your assigned unit: <b>${esc(wardLabel(myUnit.code))}</b>${myUnit.time ? ' · meets at ' + esc(myUnit.time) : ''}</p>` : ''}</div></div>
+  main(`<div class="head"><div><p class="eyebrow">${fmtD(today, LONG)}</p><h1>${greet}, ${esc(me.name)}</h1>
+    ${myUnit ? `<p class="muted">Your assigned unit: <b>${esc(wardLabel(myUnit.code))}</b>${myUnit.time ? ' · meets at ' + esc(myUnit.time) : ''}</p>` : ''}
+    ${mySpk ? `<p class="muted">Your next talk: <b>${fmtD(mySpk.Date, { weekday:'short', month:'short', day:'numeric' })}</b> · ${esc(wardLabel(mySpk.Ward))}${spkUnit && spkUnit.time ? ' · ' + esc(spkUnit.time) : ''}${mySpk.Topic ? ' · ' + esc(mySpk.Topic) : ''}
+      <button class="link" data-go="spk">View →</button></p>` : ''}</div></div>
   <div class="stats">${stats.map(([l, n, c]) => `<div class="stat ${c}"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('')}</div>
   <div class="cols">
     <section class="card">
@@ -301,6 +324,7 @@ function drawInt() {
   }).join('') : `<tr><td colspan="7">${empty('No interviews match.')}</td></tr>`;
 }
 async function markDone(id) {
+  toast('Saving…', false, 60000);
   try { await api('setInterviewStatus', { id, status:'Done' }); toast('Marked as done'); } catch (e) { toast(e.message, true); }
 }
 function intForm(i) {
@@ -371,10 +395,10 @@ const calOpen = c => !['Cancelled', 'Declined', 'Released', 'Set apart'].include
 
 // Gives open callings without an interviewer their unit's high councilor
 async function autoFill(btn) {
-  if (btn) btn.disabled = true;
-  try { const r = await api('autoAssign'); toast(r.info || 'Done'); }
-  catch (e) { toast(e.message, true); }
-  finally { if (btn) btn.disabled = false; }
+  if (btn) { btn.disabled = true; btn.textContent = 'Filling…'; }
+  toast('Filling interviewers from units…', false, 60000);
+  try { const r = await api('autoAssign'); toast(r.info || 'Done', false, 7000); }
+  catch (e) { toast(e.message, true, 7000); if (btn) { btn.disabled = false; btn.textContent = 'Fill interviewers from units'; } }
 }
 
 function pCal() {
@@ -406,7 +430,7 @@ function pCal() {
     const rc = e.target.closest('[data-crec]'); if (rc) return recForm(findCal(rc.dataset.crec));
     const lc = e.target.closest('[data-clcr]');
     if (lc) {
-      lc.disabled = true;
+      lc.disabled = true; toast('Saving…', false, 60000);
       try { await api('recordCalling', { id:lc.dataset.clcr, 'Recorded in LCR':'Yes' }); toast('Marked as recorded in LCR'); }
       catch (err) { lc.disabled = false; toast(err.message, true); }
     }
@@ -475,7 +499,10 @@ function calForm(c) {
     ${f('Notes', `<label>Notes <span class="muted">(scheduling only)</span><textarea name="Notes" rows="2">${esc(c.Notes)}</textarea></label>`)}
     <p class="hint">Never record worthiness, personal or family matters here.</p>`,
     async v => { if (v.Time !== undefined) v.Time = to12(v.Time); if (c.ID) v.ID = c.ID; await api('saveCalling', v); toast('Saved'); },
-    c.ID && cancelSt && !isCancel(c) ? { label:'Cancel', fn: async () => { await api('saveCalling', { ID:c.ID, Status:cancelSt }); toast('Cancelled'); } } : null);
+    [
+      c.ID && cancelSt && !isCancel(c) ? { label:'Cancel calling', fn: async () => { await api('saveCalling', { ID:c.ID, Status:cancelSt }); toast('Cancelled'); } } : null,
+      c.ID ? { label:'Delete', fn: async () => { await api('deleteCalling', { id:c.ID }); toast('Deleted'); } } : null
+    ].filter(Boolean));
 
   // Auto-fill the unit's high councilor as interviewer
   const wSel = $('#dlg [name=Ward]'), iSel = $('#dlg [name=Interviewer]'), hint = $('#ivAuto');
@@ -508,12 +535,17 @@ function recForm(c) {
     async v => { await api('recordCalling', Object.assign({ id:c.ID }, v)); toast('Saved'); });
 }
 
-// Stake agenda
+// Stake agenda. Ward callings ("Where presented" contains "Ward") are grouped under "<Ward> Only".
 function agendaText(items) {
   const line = c => `- ${agendaName(c.Name)}${c.Ward ? ' (' + c.Ward + ')' : ''}${c.Calling ? ' – ' + c.Calling : ''}`;
+  const scope = c => {
+    const w = c['Sustained where'] || '';
+    if (/ward/i.test(w) && c.Ward) return (WARD_NAMES[c.Ward] || c.Ward).replace(/\s*ward$/i, '') + ' Only';
+    return /stake/i.test(w) ? '' : w;
+  };
   const group = list => {
-    const keys = [...new Set(list.map(c => c['Sustained where'] || ''))].sort((a, b) => (a ? 1 : 0) - (b ? 1 : 0) || a.localeCompare(b));
-    return keys.map(k => (k ? k + '\n' : '') + list.filter(c => (c['Sustained where'] || '') === k).map(line).join('\n')).join('\n\n');
+    const keys = [...new Set(list.map(scope))].sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || a.localeCompare(b));
+    return keys.map(k => (k ? k + '\n' : '') + list.filter(c => scope(c) === k).map(line).join('\n')).join('\n\n');
   };
   const rel = items.filter(isRel), ext = items.filter(c => !isRel(c));
   return ['STAKE AGENDA', rel.length && 'Release\n' + group(rel), ext.length && 'Sustaining and Set Apart\n' + group(ext)].filter(Boolean).join('\n\n');
@@ -565,7 +597,7 @@ function pUnits() {
   const free = U.hcs.filter(h => !h.unit);
   main(`<div class="head"><div><h1>High council & units</h1><p class="muted">The high councilor assigned to a ward interviews its releases and callings unless you choose someone else</p></div>
     ${admin && C().ok ? '<button class="btn pri" id="fillBtn">Fill interviewers from units</button>' : ''}</div>
-  ${admin && U.readOnly ? '<div class="note">The High Council tab could not be read, so units can\'t be changed here. Run <b>checkAssignments</b> in Apps Script.</div>' : ''}
+  ${admin && U.readOnly ? '<div class="note">The High Council table could not be read, so units can\'t be changed here. Run <b>checkAssignments</b> in Apps Script to see why.</div>' : ''}
   <div class="units">${U.list.map(u => {
     const n = open.filter(c => unitKey(c.Ward) === u.key).length;
     const mine = me.interviewer && u.interviewer === me.interviewer;
@@ -589,25 +621,96 @@ function unitForm(u) {
   openForm('Assigned high councilor · ' + wardLabel(u.code), `
     <label>High councilor<select name="name"><option value="">— None —</option>${U.hcs.map(h =>
       `<option value="${esc(h.name)}" ${h.name === u.hc ? 'selected' : ''}>${esc(h.name)}${h.unit && unitKey(h.unit) !== u.key ? ' (now ' + esc(h.unit) + ')' : ''}</option>`).join('')}</select></label>
-    <p class="hint">This updates the Assigned Unit column on the High Council tab. Moving someone from another unit leaves that unit without a high councilor.</p>
+    <p class="hint">This updates the Assigned Unit column of the High Council table. Moving someone from another unit leaves that unit without a high councilor.</p>
     <label class="check mt"><input type="checkbox" name="fill" checked> Also make him the interviewer for open callings in this unit that don't have one yet</label>`,
     async f => {
       await api('setUnitHc', { unit:u.code, label:u.sheetCode || u.code, name:f.name });
-      if (f.fill && f.name) { const r = await api('autoAssign'); toast(r.info || 'Saved'); } else toast('Unit updated');
+      if (f.fill && f.name) { const r = await api('autoAssign'); toast('Unit updated. ' + (r.info || ''), false, 7000); } else toast('Unit updated');
     });
+}
+
+/* ---------- SPEAKING ASSIGNMENTS ---------- */
+function speakerOptions(v) {
+  const L = S.data.lists.interviewers;
+  const groups = [['High Council', L.filter(x => x.role === 'hc')], ['Stake Presidency', L.filter(x => x.role === 'sp')]].filter(g => g[1].length);
+  return '<option value="">— No speaker —</option>' +
+    (v && !L.some(x => x.name === v) ? `<option selected>${esc(v)}</option>` : '') +
+    groups.map(([g, xs]) => `<optgroup label="${g}">${xs.map(x => `<option ${x.name === v ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</optgroup>`).join('');
+}
+
+function pSpk() {
+  const P = S.data.speaking, me = S.data.me, admin = me.role === 'admin', today = S.data.today, units = unitList();
+  const dates = [...new Set(P.dates.concat(S.spkExtra))].sort();
+  const up = dates.filter(d => d >= today);
+  const past = dates.filter(d => d < today && P.rows.some(r => r.Date === d)).reverse();
+  const card = (d, isNext) => {
+    const rs = P.rows.filter(r => r.Date === d);
+    const filled = units.filter(u => rs.some(r => unitKey(r.Ward) === u.key && r.Speaker)).length;
+    return `<section class="card spk${isNext ? ' next' : ''}">
+      <div class="card-h"><div><h2>${fmtD(d, LONG)}</h2>
+        <span class="sub">${isNext ? '<span class="badge info">Next</span> ' : ''}${filled} of ${units.length} wards have a speaker</span></div>
+        ${admin ? `<button class="btn sm${filled ? '' : ' pri'}" data-spk="${d}">${filled ? 'Edit speakers' : 'Assign speakers'}</button>` : ''}</div>
+      <ul class="list">${units.map(u => {
+        const r = rs.find(x => unitKey(x.Ward) === u.key) || {};
+        const mine = me.interviewer && r.Speaker === me.interviewer;
+        return `<li class="item${mine ? ' me-row' : ''}"><span class="badge">${esc(u.code)}</span>
+          <div class="grow"><div class="t">${r.Speaker ? esc(r.Speaker) + (mine ? ' <span class="badge info">You</span>' : '') : '<span class="muted">No speaker yet</span>'}</div>
+          <div class="sub">${esc(WARD_NAMES[u.code] || u.code)}${u.time ? ' · ' + esc(u.time) : ''}${r.Topic ? ' · <b>Topic:</b> ' + esc(r.Topic) : ''}</div></div></li>`;
+      }).join('')}</ul></section>`;
+  };
+  main(`<div class="head"><div><h1>Speaking assignments</h1><p class="muted">Every 3rd Sunday of the quarter · one speaker per ward${P.topic ? ' · default topic: ' + esc(P.topic) : ''}</p></div>
+    ${admin ? '<button class="btn" id="spkAdd">+ Add a date</button>' : ''}</div>
+  <div class="spk-grid">${up.map((d, i) => card(d, i === 0)).join('') || empty('No upcoming speaking Sundays.')}</div>
+  ${past.length ? `<details class="past mt"><summary>Past speaking assignments (${past.length})</summary><div class="spk-grid mt">${past.map(d => card(d, false)).join('')}</div></details>` : ''}`);
+  document.querySelectorAll('#main [data-spk]').forEach(b => b.onclick = () => spkForm(b.dataset.spk));
+  if ($('#spkAdd')) $('#spkAdd').onclick = () => openForm('Add a speaking date', `
+    <label>Date<input type="date" name="date" required></label>
+    <p class="hint">For a special Sunday. The 3rd Sunday of Feb, May, Aug and Nov is added automatically.</p>`,
+    async f => { S.spkExtra = [...new Set(S.spkExtra.concat(f.date))]; render(); toast('Now choose the speakers'); spkForm(f.date); });
+}
+
+function spkForm(date) {
+  const P = S.data.speaking, units = unitList(), rs = P.rows.filter(r => r.Date === date);
+  openForm('Speakers · ' + fmtD(date, { weekday:'short', month:'long', day:'numeric', year:'numeric' }), `
+    <p class="hint" style="margin:0 0 6px">One speaker per ward. The topic is optional${P.topic ? ' (if blank: ' + esc(P.topic) + ')' : ''}.</p>
+    <div class="spk-form">${units.map(u => {
+      const r = rs.find(x => unitKey(x.Ward) === u.key) || {};
+      return `<div class="spk-row" data-ward="${esc(u.code)}" data-time="${esc(u.time)}">
+        <div class="spk-w"><b>${esc(u.code)}</b><span class="sub">${esc(WARD_NAMES[u.code] || '')}${u.time ? ' · ' + esc(u.time) : ''}</span></div>
+        <select class="spk-s" aria-label="Speaker for ${esc(u.code)}">${speakerOptions(r.Speaker)}</select>
+        <input class="spk-t" placeholder="Topic (optional)" value="${esc(r.Topic)}" aria-label="Topic for ${esc(u.code)}">
+      </div>`; }).join('')}</div>
+    <p class="err" id="spkWarn"></p>
+    <p class="hint">Speakers get an email with the date, ward, meeting time and topic.</p>`,
+    async () => {
+      const rows = [...document.querySelectorAll('#dlg .spk-row')].map(x => ({
+        ward:x.dataset.ward, speaker:x.querySelector('.spk-s').value, topic:x.querySelector('.spk-t').value.trim() }));
+      await api('saveSpeaking', { date, rows });
+      toast('Speakers saved');
+    });
+  // Warn when the same person is set for two wards that meet at the same time
+  const check = () => {
+    const seen = {}, clash = [];
+    document.querySelectorAll('#dlg .spk-row').forEach(x => {
+      const s = x.querySelector('.spk-s').value; if (!s) return;
+      const k = s + '|' + (x.dataset.time || '?');
+      if (seen[k]) clash.push(`${s} is set for ${seen[k]} and ${x.dataset.ward} at the same time`); else seen[k] = x.dataset.ward;
+    });
+    $('#spkWarn').textContent = clash.join('. ');
+  };
+  $('#dlg .spk-form').onchange = check; check();
 }
 
 /* ---------- ASSIGNMENTS (secretary, presidency, clerks) ---------- */
 function pAsg() {
-  const A = S.data.assignments, admin = S.data.me.role === 'admin', F = S.af, today = S.data.today;
+  const A = S.data.assignments, P = S.data.speaking, admin = S.data.me.role === 'admin', F = S.af, today = S.data.today;
   const spName = v => { const L = A.leadership.find(x => x.interviewer && x.interviewer === v); return L ? L.name : v; };
   const sps = [...new Set(A.councilors.map(c => c.SP).filter(Boolean))];
   const unitHc = w => A.councilors.find(c => unitKey(c.Unit) === unitKey(w));
-  const topic = (A.speaking.find(s => s[1]) || [])[1] || '';
-  const next = A.speaking.find(s => parseD(s[0]) && s[0] >= today);
-  const dateTxt = s => parseD(s) ? fmtD(s, { weekday:'short', month:'short', day:'numeric', year:'numeric' }) : esc(s);
+  const units = unitList();
+  const nextDates = P ? P.dates.filter(d => d >= today).slice(0, 4) : [];
   main(`<div class="head"><div><h1>Assignments</h1><p class="muted">Stake leadership, high council assignments and Sunday schedules</p></div></div>
-  ${admin && A.snap.length ? `<div class="note">Some parts are showing a saved copy because they couldn't be read from the High Council tab${A.error ? ' (' + esc(A.error) + ')' : ''}. Run <b>checkAssignments</b> in Apps Script to see what was found.</div>` : ''}
+  ${admin && A.snap.length ? `<div class="note">Some parts are showing a saved copy because they couldn't be read from the High Council table${A.error ? ' (' + esc(A.error) + ')' : ''}. Run <b>checkAssignments</b> in Apps Script to see what was found.</div>` : ''}
   <section class="card"><h2>Stake presidency & clerks</h2>
     <div class="lead mt">${A.leadership.map(p => `<div class="ld">${avatar(p.name, p.photo)}<div><b>${esc(p.name)}</b><span class="sub">${esc(p.title)}</span></div></div>`).join('')}</div>
   </section>
@@ -621,10 +724,11 @@ function pAsg() {
       <ul class="list mt">${A.schedule.map(([w, t]) => { const h = unitHc(w); return `<li class="item"><span class="badge info">${esc(t)}</span>
         <div class="grow"><div class="t">${esc(wardLabel(w))}</div><div class="sub">${h ? 'High councilor: ' + esc(h.Name) : 'No high councilor assigned'}</div></div></li>`; }).join('') || empty('No schedule yet.')}</ul>
     </section>
-    <section class="card"><h2>Speaking assignments</h2><p class="sub" style="margin:4px 0 0">Every 3rd Sunday of the quarter${topic ? ' · ' + esc(topic) : ''}</p>
-      <ul class="list mt">${A.speaking.map(([d]) => { const past = parseD(d) && d < today, isNext = next && next[0] === d;
-        return `<li class="item"><div class="grow"><div class="t">${dateTxt(d)}</div></div>${isNext ? '<span class="badge info">Next</span>' : past ? '<span class="badge">Done</span>' : ''}</li>`; }).join('') || empty('No dates yet.')}</ul>
-      ${!next && A.speaking.length ? '<p class="hint">All listed dates have passed. Add next year\'s dates to the High Council tab.</p>' : ''}
+    <section class="card"><div class="card-h"><h2>Speaking assignments</h2><button class="link" data-go="spk">Open →</button></div>
+      <p class="sub" style="margin:0">Every 3rd Sunday of the quarter${P && P.topic ? ' · ' + esc(P.topic) : ''}</p>
+      <ul class="list mt">${nextDates.map((d, i) => { const n = units.filter(u => P.rows.some(r => r.Date === d && unitKey(r.Ward) === u.key && r.Speaker)).length;
+        return `<li class="item"><div class="grow"><div class="t">${fmtD(d, { weekday:'short', month:'short', day:'numeric', year:'numeric' })}</div>
+          <div class="sub">${n} of ${units.length} wards have a speaker</div></div>${i === 0 ? '<span class="badge info">Next</span>' : ''}</li>`; }).join('') || empty('No upcoming dates.')}</ul>
     </section>
     <section class="card"><h2>Audit committee</h2>
       <ul class="list mt">${A.audit.map(([n, r]) => `<li class="item">${avatar(n, '', 'sm')}<div class="grow"><div class="t">${esc(n)}</div><div class="sub">${esc(r)}</div></div></li>`).join('') || empty('No members listed.')}</ul>
@@ -673,7 +777,7 @@ function pAnn() {
   $('#annList').onclick = e => {
     const ed = e.target.closest('[data-edit]'); if (ed) return annForm(d.announcements.find(a => a.ID === ed.dataset.edit));
     const del = e.target.closest('[data-del]');
-    if (del) twoStep(del, async () => { try { await api('deleteAnnouncement', { id:del.dataset.del }); toast('Deleted'); } catch (err) { toast(err.message, true); } });
+    if (del) twoStep(del, async () => { toast('Deleting…', false, 60000); try { await api('deleteAnnouncement', { id:del.dataset.del }); toast('Deleted'); } catch (err) { toast(err.message, true); } });
   };
 }
 function annForm(a) {
@@ -749,7 +853,7 @@ function pAcct() {
       <section class="card">
         <h2>Notifications</h2>
         <p class="hint" style="margin-bottom:6px">Emails go to ${esc(me.email)}.</p>
-        <label class="toggle"><span><b>Interviews & callings assigned to me</b><small>An email when an interview, release or setting apart is assigned to you, with the time and place.</small></span>
+        <label class="toggle"><span><b>Interviews, callings & talks assigned to me</b><small>An email when an interview, release, setting apart or speaking assignment is given to you.</small></span>
           <input type="checkbox" id="nAssigned" ${n.assigned ? 'checked' : ''}></label>
         <label class="toggle"><span><b>New announcements</b><small>A copy of each new announcement meant for you.</small></span>
           <input type="checkbox" id="nAnn" ${n.announcements ? 'checked' : ''}></label>
@@ -873,7 +977,7 @@ $('#photoFile').onchange = async e => {
   e.target.value = '';
   if (!file) return;
   try {
-    toast('Uploading photo…');
+    toast('Uploading photo…', false, 60000);
     const data = await resizePhoto(file);
     await api('saveProfile', { photo:data });
     toast('Photo updated');
