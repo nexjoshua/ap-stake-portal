@@ -39,6 +39,7 @@ const optKeep = (arr, v) => opt(v && !arr.includes(v) ? [v, ...arr] : arr, v);
 const empty = m => `<div class="empty">${m}</div>`;
 const main = h => { $('#main').innerHTML = h; };
 const wardLabel = w => WARD_NAMES[w] ? `${w} · ${WARD_NAMES[w]}` : (w || '');
+const ED = () => !!(S.data && S.data.me && S.data.me.canEdit);   // executive secretary + stake presidency
 // "SI1" and "S1" are the same ward
 const unitKey = u => String(u || '').toUpperCase().replace(/\s+/g, '').replace(/^SI(\d+)$/, 'S$1');
 const unitList = () => (S.data && S.data.units && S.data.units.list) || [];
@@ -47,6 +48,7 @@ const unitFor = w => unitList().find(u => u.key === unitKey(w));
 const hcShort = n => { const [s, g] = String(n || '').split(','); return g ? g.trim().split(/\s+/)[0] + ' ' + s.trim() : String(n || ''); };
 
 let store = null; try { store = window.sessionStorage; store.getItem('x'); } catch (e) { store = null; }
+let local = null; try { local = window.localStorage; local.getItem('x'); } catch (e) { local = null; }
 var installEvt = null;   // set when the browser offers "Install app"
 
 /* ---------- Dates & times ---------- */
@@ -69,6 +71,7 @@ const tenure = s => {
 /* ---------- Icons ---------- */
 const I = {
   home:'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+  todo:'<path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/>',
   ann:'<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 9a3 3 0 0 1 0 6M18 6a7 7 0 0 1 0 12"/>',
   int:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18M9 15l2 2 4-4"/>',
   calling:'<circle cx="10" cy="8" r="4"/><path d="M3 21a7 7 0 0 1 14 0M16 11l2 2 4-4"/>',
@@ -89,6 +92,7 @@ const I = {
 const icon = (k, cls) => `<svg ${cls ? `class="${cls}"` : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${I[k]}</svg>`;
 const PAGES = [
   { id:'home', label:'Home', icon:'home' },
+  { id:'todo', label:'Interviews to report', icon:'todo', need: d => d.tasks && d.tasks.length, hot:true },
   { id:'ann', label:'Announcements', icon:'ann' },
   { id:'int', label:'Interviews', icon:'int' },
   { id:'cal', label:'Callings & releases', icon:'calling' },
@@ -133,7 +137,7 @@ async function api(action, payload) {
     if (/^Unknown action/.test(r.error)) throw new Error('The backend is out of date. In Apps Script, deploy a new version.');
     throw new Error(r.error);
   }
-  if (r && r.me) { S.data = r; render(); }
+  if (r && r.me) { S.data = r; render(); notifyNewTasks(); setTimeout(maybePopTasks, 300); }
   return r;
 }
 function toast(m, bad, ms) {
@@ -156,16 +160,17 @@ function showApp() { $('#boot').classList.add('hidden'); $('#login').classList.a
 function signOut(expired) {
   if (S.token && !expired) run('api', S.token, 'logout', {}).catch(() => {});
   S.token = null; S.data = null; if (store) store.removeItem('tok');
+  if ('clearAppBadge' in navigator) navigator.clearAppBadge().catch(() => {});
   closeMenu(); showLogin();
   $('#lErr').textContent = expired ? 'Your session ended. Please sign in again.' : '';
 }
 function render() {
   const d = S.data, me = d.me, admin = me.role === 'admin';
-  const allowed = p => (!p.admin || admin) && (!p.need || d[p.need]);
+  const allowed = p => (!p.admin || admin) && (!p.need || (typeof p.need === 'function' ? p.need(d) : d[p.need]));
   if (!allowed(PAGES.find(p => p.id === S.page) || {})) S.page = 'home';
   if (me.role === 'hc') S.f.who = '';
   $('#nav').innerHTML = PAGES.filter(allowed).map(p =>
-    `<button data-p="${p.id}" class="${S.page === p.id ? 'on' : ''}">${icon(p.icon)}<span>${p.label}</span></button>`).join('');
+    `<button data-p="${p.id}" class="${S.page === p.id ? 'on' : ''}${p.hot ? ' hot' : ''}">${icon(p.icon)}<span>${p.label}</span>${p.id === 'todo' ? `<span class="nav-badge">${d.tasks.length}</span>` : ''}</button>`).join('');
   const links = LINKS.filter(l => !l.roles || l.roles.includes(me.role));
   $('#links').innerHTML =
     (links.length ? `<h4>Quick links</h4>` + links.map(l =>
@@ -175,18 +180,19 @@ function render() {
   $('#meName').textContent = me.name; $('#meRole').textContent = ROLE[me.role] || '';
   paintAv($('#meAv'), me.name, me.photo);
   paintAv($('#meAvMini'), me.name, me.photo);
-  ({ home:pHome, ann:pAnn, int:pInt, cal:pCal, units:pUnits, spk:pSpk, asg:pAsg, ppl:pPpl, acct:pAcct })[S.page]();
+  ({ home:pHome, todo:pTodo, ann:pAnn, int:pInt, cal:pCal, units:pUnits, spk:pSpk, asg:pAsg, ppl:pPpl, acct:pAcct })[S.page]();
 }
 function go(p) { S.page = p; closeMenu(); render(); window.scrollTo(0, 0); }
 
 /* ---------- Generic form dialog ---------- */
-// extra: one { label, fn } or a list of them (shown as red buttons on the left, each needs two clicks)
-function openForm(title, body, onSave, extra) {
-  const dlg = $('#dlg'), extras = extra ? [].concat(extra) : [];
+// extra: one { label, fn } or a list of them (red buttons on the left, each needs two clicks)
+// opts: { save:'Save', close:'Close' } button labels
+function openForm(title, body, onSave, extra, opts) {
+  const dlg = $('#dlg'), extras = extra ? [].concat(extra) : [], o = opts || {};
   dlg.innerHTML = `<form class="dlg"><header><h2>${esc(title)}</h2><button type="button" class="x" data-close aria-label="Close">×</button></header>
     <div class="body">${body}<p class="err" id="fErr"></p></div>
     <footer>${extras.map((x, i) => `<button type="button" class="btn danger-t" data-extra="${i}">${esc(x.label)}</button>`).join('')}
-    <span class="grow"></span><button type="button" class="btn" data-close>Close</button><button class="btn pri" id="fSave">Save</button></footer></form>`;
+    <span class="grow"></span><button type="button" class="btn" data-close>${esc(o.close || 'Close')}</button><button class="btn pri" id="fSave">${esc(o.save || 'Save')}</button></footer></form>`;
   const form = dlg.querySelector('form');
   dlg.querySelectorAll('[data-close]').forEach(b => b.onclick = () => dlg.close());
   form.onsubmit = e => {
@@ -214,9 +220,97 @@ async function guard(fn) {
   }
 }
 
+/* ---------- INTERVIEWS TO REPORT (SP & HC) ---------- */
+const taskKey = t => t.kind + ':' + t.id;
+const TASK_KIND = { int:'Interview', cal:'Calling interview', sa:'Setting apart' };
+function taskOutcomes(t) {
+  const re = ['reassign', "I can't do this one – please reassign"];
+  if (t.kind === 'int') return [['done', 'Completed'], ['followup', 'Not finished – needs follow-up'], re];
+  if (t.kind === 'sa') return [['done', 'Set apart'], re];
+  return t.release
+    ? [['yes', 'Member agreed to be released'], ['no', 'Not ready yet – put on hold'], re]
+    : [['yes', 'Accepted the calling'], ['no', 'Did not accept'], re];
+}
+function taskForm(t, pos) {
+  const tasks = S.data.tasks || [], today = S.data.today;
+  openForm(TASK_KIND[t.kind] + (tasks.length > 1 ? ` (${pos || 1} of ${tasks.length})` : ''), `
+    <div class="task-head"><b>${esc(agendaName(t.name))}</b>
+      <span class="sub">${esc(t.what)}${t.ward ? ' · ' + esc(wardLabel(t.ward)) : ''}</span>
+      ${t.date ? `<span class="sub">Scheduled ${fmtD(t.date, { weekday:'short', month:'short', day:'numeric' })}${t.time ? ' · ' + esc(t.time) : ''}${t.venue ? ' · ' + esc(t.venue) : ''}</span>` : ''}</div>
+    <fieldset class="opts"><legend>What happened?</legend>
+      ${taskOutcomes(t).map(([v, l]) => `<label class="opt"><input type="radio" name="outcome" value="${v}" required><span>${esc(l)}</span></label>`).join('')}
+    </fieldset>
+    <label>Date<input type="date" name="date" value="${esc(t.date && t.date <= today ? t.date : today)}"></label>
+    <label>Note for the executive secretary <span class="muted">(optional, scheduling only)</span><textarea name="note" rows="2" maxlength="300"></textarea></label>
+    <p class="hint">Never record worthiness, personal or family matters here.</p>`,
+    async f => {
+      const r = await api('reportTask', { kind:t.kind, id:t.id, outcome:f.outcome, date:f.date, note:f.note });
+      toast(r.info || 'Report sent');
+    }, null, { save:'Send report', close:'Later' });
+}
+// Pops the form up on screen when there is something new to report (once per sign-in for the same list)
+function maybePopTasks() {
+  const d = S.data;
+  if (!d || !d.tasks || !d.tasks.length || $('#dlg').open) return;
+  const keys = d.tasks.map(taskKey).sort().join(','), k = 'tp_' + d.me.email;
+  if (store && store.getItem(k) === keys) return;
+  if (store) store.setItem(k, keys);
+  taskForm(d.tasks[0], 1);
+}
+// Phone / computer notification for newly assigned items (when the portal is open or installed)
+function showNote(title, body) {
+  const o = { body, icon:'icon-192.png', badge:'icon-192.png', tag:'apstake-tasks', renotify:true };
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller)
+    navigator.serviceWorker.ready.then(r => r.showNotification(title, o)).catch(() => {});
+  else { try { new Notification(title, o); } catch (e) {} }
+}
+function notifyNewTasks() {
+  const d = S.data; if (!d || !d.me) return;
+  const cur = (d.tasks || []).map(taskKey), k = 'known_' + d.me.email;
+  let known = null; try { known = JSON.parse(local && local.getItem(k)); } catch (e) {}
+  try { local && local.setItem(k, JSON.stringify(cur)); } catch (e) {}
+  if ('setAppBadge' in navigator) (cur.length ? navigator.setAppBadge(cur.length) : navigator.clearAppBadge()).catch(() => {});
+  if (!Array.isArray(known) || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const fresh = (d.tasks || []).filter(t => !known.includes(taskKey(t)));
+  if (!fresh.length) return;
+  showNote(fresh.length === 1 ? 'New ' + TASK_KIND[fresh[0].kind].toLowerCase() + ' assigned to you' : fresh.length + ' new interviews assigned to you',
+    fresh.map(t => agendaName(t.name) + ' – ' + t.what).join('\n'));
+}
+async function askNotify() {
+  if (!('Notification' in window)) return toast('This browser can\'t show notifications. On iPhone, add the portal to your Home Screen first, then open it from there.', true, 9000);
+  const p = await Notification.requestPermission();
+  if (p === 'granted') { toast('Notifications are on for this device'); showNote('Notifications are on', 'You will be told here when an interview is assigned to you.'); }
+  else toast('Notifications were not allowed. You can change this in your browser settings.', true, 7000);
+  render();
+}
+// Checks for new assignments every 5 minutes and whenever the portal comes back on screen
+async function checkTasks() {
+  if (!S.token || !S.data || document.visibilityState !== 'visible') return;
+  try {
+    const r = await run('api', S.token, 'ping', {});
+    if (!r || r.error || !r.tasks) return;
+    const a = r.tasks.map(taskKey).sort().join(','), b = (S.data.tasks || []).map(taskKey).sort().join(',');
+    if (a !== b && !$('#dlg').open) await api('bootstrap');
+  } catch (e) {}
+}
+
+function pTodo() {
+  const T = S.data.tasks || [];
+  const canAsk = 'Notification' in window && Notification.permission === 'default';
+  main(`<div class="head"><div><h1>Interviews to report</h1><p class="muted">Tell the executive secretary how each one went. It leaves this list once you send the report.</p></div></div>
+  ${canAsk ? `<div class="note info"><span>Get a notification on this device when a new interview is assigned to you.</span><button class="btn sm pri" id="askN">Turn on notifications</button></div>` : ''}
+  <div class="stack">${T.map((t, i) => `<section class="card task"><div class="task-row">
+    <span class="badge ${t.kind === 'sa' ? 'violet' : t.kind === 'int' ? 'info' : 'warn'}">${TASK_KIND[t.kind]}</span>
+    <div class="grow"><div class="t">${esc(agendaName(t.name))}</div>
+      <div class="sub">${esc(t.what)}${t.ward ? ' · ' + esc(wardLabel(t.ward)) : ''}${t.date ? ' · ' + fmtD(t.date) + (t.time ? ' ' + esc(t.time) : '') : ''}</div></div>
+    <button class="btn pri sm" data-task="${i}">Report</button></div></section>`).join('') || empty('Nothing to report. Thank you!')}</div>`);
+  document.querySelectorAll('#main [data-task]').forEach(b => b.onclick = () => taskForm(T[+b.dataset.task], +b.dataset.task + 1));
+  if ($('#askN')) $('#askN').onclick = askNotify;
+}
+
 /* ---------- HOME ---------- */
 function pHome() {
-  const d = S.data, me = d.me, admin = me.role === 'admin', clerk = me.role === 'clerk', all = admin || clerk;
+  const d = S.data, me = d.me, admin = me.role === 'admin', clerk = me.role === 'clerk', ed = ED(), all = admin || clerk;
   const today = d.today, wk = addDays(today, 7);
   const inWeek = i => i['Scheduled date'] && i['Scheduled date'] >= today && i['Scheduled date'] <= wk;
   const open = d.interviews.filter(OPEN);
@@ -225,6 +319,7 @@ function pHome() {
   const noIv = open.filter(i => !i.Interviewer);
   const calOpenList = C().rows.filter(calOpen);
   const myCal = all ? calOpenList : calOpenList.filter(mineCal);
+  const tasks = d.tasks || [];
   const myUnit = me.interviewer && unitList().find(u => u.interviewer === me.interviewer);
   const mySpk = me.interviewer && d.speaking ? d.speaking.rows.filter(r => r.Speaker === me.interviewer && r.Date >= today)
     .sort((a, b) => a.Date.localeCompare(b.Date))[0] : null;
@@ -240,8 +335,8 @@ function pHome() {
     ['To record in LCR', calOpenList.filter(c => stage(c)[0] === 'Record in LCR').length, 'violet'],
     ['Announcements', d.announcements.length, 'mute']
   ] : [
+    ['To report', tasks.length, tasks.length ? 'warn' : 'ok'],
     ['My open interviews', mine.length, 'info'],
-    ['Next 7 days', mine.filter(inWeek).length, 'ok'],
     ['My callings & releases', myCal.length, 'violet'],
     ['Announcements', d.announcements.length, 'mute']
   ];
@@ -253,12 +348,14 @@ function pHome() {
     ${myUnit ? `<p class="muted">Your assigned unit: <b>${esc(wardLabel(myUnit.code))}</b>${myUnit.time ? ' · meets at ' + esc(myUnit.time) : ''}</p>` : ''}
     ${mySpk ? `<p class="muted">Your next talk: <b>${fmtD(mySpk.Date, { weekday:'short', month:'short', day:'numeric' })}</b> · ${esc(wardLabel(mySpk.Ward))}${spkUnit && spkUnit.time ? ' · ' + esc(spkUnit.time) : ''}${mySpk.Topic ? ' · ' + esc(mySpk.Topic) : ''}
       <button class="link" data-go="spk">View →</button></p>` : ''}</div></div>
+  ${tasks.length ? `<div class="note info"><span><b>You have ${tasks.length} interview${tasks.length === 1 ? '' : 's'} to report.</b> Tell the executive secretary how ${tasks.length === 1 ? 'it' : 'they'} went.</span>
+    <button class="btn sm pri" data-go="todo">Report now</button></div>` : ''}
   <div class="stats">${stats.map(([l, n, c]) => `<div class="stat ${c}"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('')}</div>
   <div class="cols">
     <section class="card">
       <div class="card-h"><h2>${all ? 'Upcoming interviews' : 'My upcoming interviews'}</h2><button class="link" data-go="int">View all →</button></div>
       ${upcoming.length ? `<ul class="list">${upcoming.map(item).join('')}</ul>` : empty('Nothing scheduled yet.')}
-      ${admin && noIv.length ? `<div class="card-h mt"><h2>Needs an interviewer</h2></div><ul class="list">${noIv.slice(0, 5).map(i =>
+      ${ed && noIv.length ? `<div class="card-h mt"><h2>Needs an interviewer</h2></div><ul class="list">${noIv.slice(0, 5).map(i =>
         `<li class="item"><div class="grow"><div class="t">${esc(i.Name)}</div><div class="sub">${esc(i.Type)} · ${esc(i.Ward)} · ${esc(i.Purpose)}</div></div>
         <button class="btn sm pri" data-assign="${esc(i.ID)}">Assign</button></li>`).join('')}</ul>` : ''}
     </section>
@@ -281,12 +378,12 @@ function pHome() {
 /* ---------- INTERVIEWS ---------- */
 const findInt = id => S.data.interviews.find(i => i.ID === id);
 function pInt() {
-  const d = S.data, me = d.me, admin = me.role === 'admin', seeAll = me.role !== 'hc';
+  const d = S.data, me = d.me, ed = ED(), seeAll = me.role !== 'hc';
   const open = d.interviews.filter(OPEN);
   const chip = (v, l, c) => `<button class="chip ${S.f.who === v ? 'on' : ''}" data-w="${esc(v)}">${esc(l)}<span>${c}</span></button>`;
   const per = d.lists.interviewers.map(x => ({ n:x.name, sp:x.role === 'sp', c:open.filter(i => i.Interviewer === x.name).length }));
   main(`<div class="head"><div><h1>Interviews</h1><p class="muted">${seeAll ? 'Temple recommend and other interview requests across the stake' : 'Interviews assigned to you'}</p></div>
-    ${admin ? '<button class="btn pri" id="newInt">+ New interview</button>' : ''}</div>
+    ${ed ? '<button class="btn pri" id="newInt">+ New interview</button>' : ''}</div>
   ${seeAll ? `<div class="chips" id="who">${chip('', 'Everyone', open.length)}${chip('__none', 'Needs interviewer', open.filter(i => !i.Interviewer).length)}
     ${per.filter(x => x.sp || x.c).map(x => chip(x.n, x.n, x.c)).join('')}</div>` : ''}
   <div class="toolbar"><input id="q" class="input" placeholder="Search name, ward, purpose…" value="${esc(S.f.q)}">
@@ -297,23 +394,23 @@ function pInt() {
     $('#st').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); drawInt(); };
   if ($('#who')) $('#who').onclick = e => { const b = e.target.closest('.chip'); if (!b) return; S.f.who = b.dataset.w;
     $('#who').querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === b)); drawInt(); };
-  if (admin) $('#newInt').onclick = () => intForm();
+  if (ed) $('#newInt').onclick = () => intForm();
   $('#tb').onclick = e => {
-    const ed = e.target.closest('[data-edit]'); if (ed) return intForm(findInt(ed.dataset.edit));
+    const ed2 = e.target.closest('[data-edit]'); if (ed2) return intForm(findInt(ed2.dataset.edit));
     const dn = e.target.closest('[data-done]'); if (dn) markDone(dn.dataset.done);
   };
   drawInt();
 }
 function drawInt() {
-  const d = S.data, me = d.me, admin = me.role === 'admin', q = S.f.q.toLowerCase();
+  const d = S.data, me = d.me, ed = ED(), q = S.f.q.toLowerCase();
   let rows = d.interviews.filter(i => S.f.status === 'all' ? true : S.f.status === 'open' ? OPEN(i) : i.Status === 'Done');
   if (S.f.who === '__none') rows = rows.filter(i => !i.Interviewer); else if (S.f.who) rows = rows.filter(i => i.Interviewer === S.f.who);
   if (q) rows = rows.filter(i => [i.Name, i.Ward, i.Purpose, i.Type, i.Interviewer, i.Venue].join(' ').toLowerCase().includes(q));
   rows.sort(byWhen);
   $('#tb').innerHTML = rows.length ? rows.map(i => {
     const mine = i.Interviewer && i.Interviewer === me.interviewer;
-    const acts = (admin ? `<button class="btn sm" data-edit="${esc(i.ID)}">Edit</button>` : '') +
-      ((mine || admin) && OPEN(i) ? `<button class="btn sm ok" data-done="${esc(i.ID)}">Mark done</button>` : '');
+    const acts = (ed ? `<button class="btn sm" data-edit="${esc(i.ID)}">Edit</button>` : '') +
+      ((mine || ed) && OPEN(i) ? `<button class="btn sm ok" data-done="${esc(i.ID)}">Mark done</button>` : '');
     return `<tr>
       <td data-l="Member"><div><b>${esc(i.Name)}</b><div class="sub">${esc(i.Purpose)}</div></div></td>
       <td data-l="Type">${esc(i.Type)}</td><td data-l="Ward">${esc(i.Ward)}</td>
@@ -402,18 +499,18 @@ async function autoFill(btn) {
 }
 
 function pCal() {
-  const me = S.data.me, admin = me.role === 'admin', hc = me.role === 'hc', cal = C(), F = S.cf;
+  const me = S.data.me, ed = ED(), hc = me.role === 'hc', cal = C(), F = S.cf;
   if (hc && F.kind === 'none') F.kind = '';
   const head = `<div class="head"><div><h1>Callings & releases</h1><p class="muted">${hc ? 'Callings and releases assigned to you'
       : me.role === 'clerk' ? 'Mark each one once it is recorded in LCR' : 'Extending callings, releases, sustaining and setting apart'}</p></div>
-    ${admin && cal.ok ? `<div class="head-acts"><button class="btn" id="fillBtn" title="Give each open calling without an interviewer its ward's assigned high councilor">Fill interviewers from units</button>
+    ${ed && cal.ok ? `<div class="head-acts"><button class="btn" id="fillBtn" title="Give each open calling without an interviewer its ward's assigned high councilor">Fill interviewers from units</button>
       <button class="btn" id="agBtn">Build stake agenda</button><button class="btn pri" id="newCal">+ New</button></div>` : ''}</div>`;
   if (!cal.ok) return main(head + `<div class="card">${empty('The Callings & Releases tab could not be read.<br><span class="sub">' + esc(cal.error || 'Please update the Apps Script backend.') + '</span>')}</div>`);
 
   const open = cal.rows.filter(calOpen);
   const kinds = [['', 'All', open.length], ['ext', 'Extend calling', open.filter(c => !isRel(c)).length], ['rel', 'Release', open.filter(isRel).length]];
   if (!hc) kinds.push(['none', 'Needs interviewer', open.filter(c => !c.Interviewer).length]);
-  if (hasCol('Recorded in LCR') && (admin || me.role === 'clerk')) kinds.push(['lcr', 'To record in LCR', open.filter(c => stage(c)[0] === 'Record in LCR').length]);
+  if (hasCol('Recorded in LCR') && (ed || me.role === 'clerk')) kinds.push(['lcr', 'To record in LCR', open.filter(c => stage(c)[0] === 'Record in LCR').length]);
   main(head + `<div class="chips" id="cKind">${kinds.map(([v, l, n]) => `<button class="chip ${F.kind === v ? 'on' : ''}" data-k="${v}">${l}<span>${n}</span></button>`).join('')}</div>
   <div class="toolbar"><input id="cq" class="input" placeholder="Search name, ward, calling…" value="${esc(F.q)}">
     <div class="seg" id="cst">${[['open', 'Open'], ['done', 'Finished'], ['all', 'All']].map(([v, l]) => `<button data-s="${v}" class="${F.view === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
@@ -424,9 +521,9 @@ function pCal() {
     $('#cst').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); drawCal(); };
   $('#cKind').onclick = e => { const b = e.target.closest('.chip'); if (!b) return; F.kind = b.dataset.k;
     $('#cKind').querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === b)); drawCal(); };
-  if (admin) { $('#newCal').onclick = () => calForm(); $('#agBtn').onclick = agendaForm; $('#fillBtn').onclick = e => autoFill(e.currentTarget); }
+  if (ed) { $('#newCal').onclick = () => calForm(); $('#agBtn').onclick = agendaForm; $('#fillBtn').onclick = e => autoFill(e.currentTarget); }
   $('#ctb').onclick = async e => {
-    const ed = e.target.closest('[data-cedit]'); if (ed) return calForm(findCal(ed.dataset.cedit));
+    const edb = e.target.closest('[data-cedit]'); if (edb) return calForm(findCal(edb.dataset.cedit));
     const rc = e.target.closest('[data-crec]'); if (rc) return recForm(findCal(rc.dataset.crec));
     const lc = e.target.closest('[data-clcr]');
     if (lc) {
@@ -439,8 +536,8 @@ function pCal() {
 }
 
 function drawCal() {
-  const F = S.cf, me = S.data.me, admin = me.role === 'admin', q = F.q.toLowerCase();
-  const canLcr = (admin || me.role === 'clerk') && hasCol('Recorded in LCR');
+  const F = S.cf, me = S.data.me, ed = ED(), q = F.q.toLowerCase();
+  const canLcr = (ed || me.role === 'clerk') && hasCol('Recorded in LCR');
   let rows = C().rows.filter(c => F.view === 'all' ? true : F.view === 'open' ? calOpen(c) : !calOpen(c));
   if (F.kind === 'ext') rows = rows.filter(c => !isRel(c));
   else if (F.kind === 'rel') rows = rows.filter(isRel);
@@ -454,8 +551,8 @@ function drawCal() {
     const u = !c.Interviewer && unitFor(c.Ward);
     const dates = [c['Sustained date'] && (isRel(c) ? 'Released ' : 'Sustained ') + short(c['Sustained date']),
                    c['Set apart date'] && 'Set apart ' + short(c['Set apart date'])].filter(Boolean).join(' · ');
-    const acts = (admin ? `<button class="btn sm" data-cedit="${esc(c.ID)}">Edit</button>` : '') +
-      (mineCal(c) && calOpen(c) && st !== 'Record in LCR' ? `<button class="btn sm ok" data-crec="${esc(c.ID)}">Record</button>` : '') +
+    const acts = (ed ? `<button class="btn sm" data-cedit="${esc(c.ID)}">Edit</button>` : '') +
+      (!ed && mineCal(c) && calOpen(c) && st !== 'Record in LCR' ? `<button class="btn sm ok" data-crec="${esc(c.ID)}">Record</button>` : '') +
       (canLcr && st === 'Record in LCR' ? `<button class="btn sm ok" data-clcr="${esc(c.ID)}">Recorded in LCR</button>` : '');
     return `<tr>
       <td data-l="Member"><div><b>${esc(c.Name)}</b><div class="sub">${esc(c.Calling || '')}</div></div></td>
@@ -469,7 +566,7 @@ function drawCal() {
   }).join('') : `<tr><td colspan="7">${empty('No callings match.')}</td></tr>`;
 }
 
-// Add / edit (executive secretary). Choosing a ward fills in its assigned high councilor.
+// Add / edit (executive secretary + stake presidency). Choosing a ward fills in its assigned high councilor.
 function calForm(c) {
   const L = C().lists, isNew = !c;
   c = c || { Action: L.actions.find(a => !/releas/i.test(a)) || L.actions[0] || '', Status: L.statuses[0] || '' };
@@ -520,7 +617,7 @@ function calForm(c) {
   }
 }
 
-// Record results (assigned SP / HC)
+// Record results (assigned SP / HC) – the full form; the quick way is "Interviews to report"
 function recForm(c) {
   const L = C().lists, rel = isRel(c), me = S.data.me.interviewer, iv = c.Interviewer === me, setter = c['Set apart by'] === me;
   const f = (k, html) => hasCol(k) ? html : '';
@@ -592,18 +689,18 @@ function agendaForm() {
 
 /* ---------- HIGH COUNCIL & UNITS ---------- */
 function pUnits() {
-  const U = S.data.units || { list:[], hcs:[], readOnly:true }, me = S.data.me, admin = me.role === 'admin';
+  const U = S.data.units || { list:[], hcs:[], readOnly:true }, me = S.data.me, ed = ED();
   const open = C().rows.filter(calOpen);
   const free = U.hcs.filter(h => !h.unit);
   main(`<div class="head"><div><h1>High council & units</h1><p class="muted">The high councilor assigned to a ward interviews its releases and callings unless you choose someone else</p></div>
-    ${admin && C().ok ? '<button class="btn pri" id="fillBtn">Fill interviewers from units</button>' : ''}</div>
-  ${admin && U.readOnly ? '<div class="note">The High Council table could not be read, so units can\'t be changed here. Run <b>checkAssignments</b> in Apps Script to see why.</div>' : ''}
+    ${ed && C().ok ? '<button class="btn pri" id="fillBtn">Fill interviewers from units</button>' : ''}</div>
+  ${ed && U.readOnly ? '<div class="note">The High Council table could not be read, so units can\'t be changed here. Run <b>checkAssignments</b> in Apps Script to see why.</div>' : ''}
   <div class="units">${U.list.map(u => {
     const n = open.filter(c => unitKey(c.Ward) === u.key).length;
     const mine = me.interviewer && u.interviewer === me.interviewer;
     return `<section class="card unit${mine ? ' mine' : ''}">
       <div class="card-h"><div><h2>${esc(wardLabel(u.code))}</h2>${u.time ? `<span class="sub">Sunday meeting · ${esc(u.time)}</span>` : ''}</div>
-        ${admin && !U.readOnly ? `<button class="btn sm" data-unit="${esc(u.key)}">Change</button>` : ''}</div>
+        ${ed && !U.readOnly ? `<button class="btn sm" data-unit="${esc(u.key)}">Change</button>` : ''}</div>
       ${u.hc ? `<div class="person">${avatar(hcShort(u.hc), '')}<div><b>${esc(u.hc)}</b><div class="sub">${u.interviewer ? 'Interviews as ' + esc(u.interviewer) : '<span class="warn-t">No matching interviewer in People & logins</span>'}</div></div></div>`
              : '<p class="warn-t" style="margin:6px 0">No high councilor assigned</p>'}
       <div class="unit-foot">${u.spName ? `<span class="sub">Presidency: ${esc(u.spName)}</span>` : '<span></span>'}
@@ -639,7 +736,7 @@ function speakerOptions(v) {
 }
 
 function pSpk() {
-  const P = S.data.speaking, me = S.data.me, admin = me.role === 'admin', today = S.data.today, units = unitList();
+  const P = S.data.speaking, me = S.data.me, ed = ED(), today = S.data.today, units = unitList();
   const dates = [...new Set(P.dates.concat(S.spkExtra))].sort();
   const up = dates.filter(d => d >= today);
   const past = dates.filter(d => d < today && P.rows.some(r => r.Date === d)).reverse();
@@ -649,7 +746,7 @@ function pSpk() {
     return `<section class="card spk${isNext ? ' next' : ''}">
       <div class="card-h"><div><h2>${fmtD(d, LONG)}</h2>
         <span class="sub">${isNext ? '<span class="badge info">Next</span> ' : ''}${filled} of ${units.length} wards have a speaker</span></div>
-        ${admin ? `<button class="btn sm${filled ? '' : ' pri'}" data-spk="${d}">${filled ? 'Edit speakers' : 'Assign speakers'}</button>` : ''}</div>
+        ${ed ? `<button class="btn sm${filled ? '' : ' pri'}" data-spk="${d}">${filled ? 'Edit speakers' : 'Assign speakers'}</button>` : ''}</div>
       <ul class="list">${units.map(u => {
         const r = rs.find(x => unitKey(x.Ward) === u.key) || {};
         const mine = me.interviewer && r.Speaker === me.interviewer;
@@ -659,7 +756,7 @@ function pSpk() {
       }).join('')}</ul></section>`;
   };
   main(`<div class="head"><div><h1>Speaking assignments</h1><p class="muted">Every 3rd Sunday of the quarter · one speaker per ward${P.topic ? ' · default topic: ' + esc(P.topic) : ''}</p></div>
-    ${admin ? '<button class="btn" id="spkAdd">+ Add a date</button>' : ''}</div>
+    ${ed ? '<button class="btn" id="spkAdd">+ Add a date</button>' : ''}</div>
   <div class="spk-grid">${up.map((d, i) => card(d, i === 0)).join('') || empty('No upcoming speaking Sundays.')}</div>
   ${past.length ? `<details class="past mt"><summary>Past speaking assignments (${past.length})</summary><div class="spk-grid mt">${past.map(d => card(d, false)).join('')}</div></details>` : ''}`);
   document.querySelectorAll('#main [data-spk]').forEach(b => b.onclick = () => spkForm(b.dataset.spk));
@@ -703,14 +800,14 @@ function spkForm(date) {
 
 /* ---------- ASSIGNMENTS (secretary, presidency, clerks) ---------- */
 function pAsg() {
-  const A = S.data.assignments, P = S.data.speaking, admin = S.data.me.role === 'admin', F = S.af, today = S.data.today;
+  const A = S.data.assignments, P = S.data.speaking, ed = ED(), F = S.af, today = S.data.today;
   const spName = v => { const L = A.leadership.find(x => x.interviewer && x.interviewer === v); return L ? L.name : v; };
   const sps = [...new Set(A.councilors.map(c => c.SP).filter(Boolean))];
   const unitHc = w => A.councilors.find(c => unitKey(c.Unit) === unitKey(w));
   const units = unitList();
   const nextDates = P ? P.dates.filter(d => d >= today).slice(0, 4) : [];
   main(`<div class="head"><div><h1>Assignments</h1><p class="muted">Stake leadership, high council assignments and Sunday schedules</p></div></div>
-  ${admin && A.snap.length ? `<div class="note">Some parts are showing a saved copy because they couldn't be read from the High Council table${A.error ? ' (' + esc(A.error) + ')' : ''}. Run <b>checkAssignments</b> in Apps Script to see what was found.</div>` : ''}
+  ${ed && A.snap.length ? `<div class="note">Some parts are showing a saved copy because they couldn't be read from the High Council table${A.error ? ' (' + esc(A.error) + ')' : ''}. Run <b>checkAssignments</b> in Apps Script to see what was found.</div>` : ''}
   <section class="card"><h2>Stake presidency & clerks</h2>
     <div class="lead mt">${A.leadership.map(p => `<div class="ld">${avatar(p.name, p.photo)}<div><b>${esc(p.name)}</b><span class="sub">${esc(p.title)}</span></div></div>`).join('')}</div>
   </section>
@@ -760,22 +857,22 @@ function drawAsg() {
 
 /* ---------- ANNOUNCEMENTS ---------- */
 function pAnn() {
-  const d = S.data, admin = d.me.role === 'admin';
+  const d = S.data, ed = ED();
   const linkify = s => esc(s).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>').replace(/\n/g, '<br>');
-  main(`<div class="head"><div><h1>Announcements</h1><p class="muted">${admin ? 'Each announcement shows only to the audience you choose' : 'From the stake executive secretary'}</p></div>
-    ${admin ? '<button class="btn pri" id="newAnn">+ New announcement</button>' : ''}</div>
+  main(`<div class="head"><div><h1>Announcements</h1><p class="muted">${ed ? 'Each announcement shows only to the audience you choose' : 'From the stake executive secretary'}</p></div>
+    ${ed ? '<button class="btn pri" id="newAnn">+ New announcement</button>' : ''}</div>
   <div class="stack" id="annList">${d.announcements.length ? d.announcements.map(a => {
     const expired = a.Expires && a.Expires < d.today;
     return `<article class="card ann ${isT(a.Pinned) ? 'pinned' : ''}"><div class="meta">${isT(a.Pinned) ? '<span class="badge info">Pinned</span>' : ''}
       <span class="badge">${esc(a.Audience || 'Everyone')}</span>${expired ? '<span class="badge warn">Expired</span>' : ''}
       <span class="sub">${fmtD(a.Posted, { month:'short', day:'numeric', year:'numeric' })} · ${esc(a['Posted by'])}</span></div>
       <h3>${esc(a.Title)}</h3><div class="body">${linkify(a.Body)}</div>
-      ${admin ? `<div class="acts"><button class="btn sm" data-edit="${esc(a.ID)}">Edit</button><button class="btn sm danger-t" data-del="${esc(a.ID)}">Delete</button></div>` : ''}</article>`;
+      ${ed ? `<div class="acts"><button class="btn sm" data-edit="${esc(a.ID)}">Edit</button><button class="btn sm danger-t" data-del="${esc(a.ID)}">Delete</button></div>` : ''}</article>`;
   }).join('') : empty('No announcements yet.')}</div>`);
-  if (!admin) return;
+  if (!ed) return;
   $('#newAnn').onclick = () => annForm();
   $('#annList').onclick = e => {
-    const ed = e.target.closest('[data-edit]'); if (ed) return annForm(d.announcements.find(a => a.ID === ed.dataset.edit));
+    const edb = e.target.closest('[data-edit]'); if (edb) return annForm(d.announcements.find(a => a.ID === edb.dataset.edit));
     const del = e.target.closest('[data-del]');
     if (del) twoStep(del, async () => { toast('Deleting…', false, 60000); try { await api('deleteAnnouncement', { id:del.dataset.del }); toast('Deleted'); } catch (err) { toast(err.message, true); } });
   };
@@ -792,7 +889,7 @@ function annForm(a) {
     async f => { if (a.ID) f.ID = a.ID; await api('saveAnnouncement', f); toast(a.ID ? 'Announcement updated' : 'Announcement posted'); });
 }
 
-/* ---------- PEOPLE (admin) ---------- */
+/* ---------- PEOPLE (executive secretary only) ---------- */
 function pPpl() {
   const us = S.data.users;
   main(`<div class="head"><div><h1>People & logins</h1><p class="muted">Interviewer names here fill every interviewer dropdown.</p></div>
@@ -834,7 +931,8 @@ function pwForm(u) {
 function pAcct() {
   const me = S.data.me, n = me.notify || { assigned:true, announcements:true };
   const hasPhoto = okPhoto(me.photo);
-  main(`<div class="head"><div><h1>My account</h1><p class="muted">Your photo, email notifications and password</p></div></div>
+  const N = 'Notification' in window ? Notification.permission : 'none';
+  main(`<div class="head"><div><h1>My account</h1><p class="muted">Your photo, notifications and password</p></div></div>
   <div class="cols">
     <div class="stack">
       <section class="card">
@@ -857,6 +955,12 @@ function pAcct() {
           <input type="checkbox" id="nAssigned" ${n.assigned ? 'checked' : ''}></label>
         <label class="toggle"><span><b>New announcements</b><small>A copy of each new announcement meant for you.</small></span>
           <input type="checkbox" id="nAnn" ${n.announcements ? 'checked' : ''}></label>
+        <div class="toggle"><span><b>Notifications on this device</b><small>${
+          N === 'granted' ? 'On. This phone or computer shows a notification when something new is assigned to you while the portal is open or installed.'
+          : N === 'denied' ? 'Blocked. Allow notifications for this site in your browser settings.'
+          : N === 'none' ? 'This browser can\'t show notifications. On iPhone, add the portal to your Home Screen and open it from there.'
+          : 'Shows a phone or computer notification when a new interview is assigned to you.'}</small></span>
+          ${N === 'granted' ? '<span class="badge ok">On</span>' : N === 'default' ? '<button type="button" class="btn sm pri" id="askN2">Turn on</button>' : ''}</div>
       </section>
     </div>
     <section class="card"><h2>Change password</h2>
@@ -867,6 +971,7 @@ function pAcct() {
     </section>
   </div>`);
   addPwToggles($('#main'));
+  if ($('#askN2')) $('#askN2').onclick = askNotify;
 
   // Photo
   $('#phUp').onclick = () => $('#photoFile').click();
@@ -971,6 +1076,10 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu();
 window.addEventListener('resize', () => { if (window.innerWidth > 960) closeMenu(); });
 $('#nav').onclick = e => { const b = e.target.closest('button'); if (b) go(b.dataset.p); };
 $('#main').addEventListener('click', e => { const g = e.target.closest('[data-go]'); if (g) go(g.dataset.go); });
+
+// New-assignment checks: every 5 minutes, and whenever the portal comes back on screen
+setInterval(checkTasks, 5 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkTasks(); });
 
 $('#photoFile').onchange = async e => {
   const file = e.target.files && e.target.files[0];
