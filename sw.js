@@ -1,5 +1,5 @@
 /* AP Stake Portal – app helper (offline shell only; never stores portal data) */
-const CACHE = 'apstake-v3';   // change this number whenever you upload new files
+const CACHE = 'apstake-v6';   // change this number whenever you upload new files
 const SHELL = ['./', './index.html', './styles.css', './app.js', './favicon.svg',
                './icon-192.png', './icon-512.png', './manifest.webmanifest'];
 
