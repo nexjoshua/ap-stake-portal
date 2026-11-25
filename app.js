@@ -16,8 +16,15 @@ const LINKS = [
   { label:'General Handbook ch. 29 (29.3)', url:'https://www.churchofjesuschrist.org/study/manual/general-handbook/29-meetings-in-the-church?lang=eng', icon:'book' }
 ];
 
+// Ward codes and their full names
+const WARD_NAMES = {
+  A1:'Antipolo 1st Ward', A2:'Antipolo 2nd Ward',
+  M1:'Masagana 1st Ward', M2:'Masagana 2nd Ward',
+  S1:'San Isidro 1st Ward', S2:'San Isidro 2nd Ward'
+};
+
 /* ---------- Basics ---------- */
-const S = { token:null, data:null, page:'home', f:{ q:'', who:'', status:'open' } };
+const S = { token:null, data:null, page:'home', f:{ q:'', who:'', status:'open' }, cf:{ q:'', view:'open', kind:'' } };
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isT = v => v === true || /^(true|yes)$/i.test(String(v));
@@ -26,8 +33,10 @@ const OPEN = i => !['Done','Cancelled'].includes(i.Status);
 const BADGE = { 'To Schedule':'warn', 'Scheduled':'info', 'Done':'ok', 'Follow-up':'violet', 'Cancelled':'' };
 const badge = s => `<span class="badge ${BADGE[s] || ''}">${esc(s || '—')}</span>`;
 const opt = (arr, v) => arr.map(x => `<option ${x === v ? 'selected' : ''}>${esc(x)}</option>`).join('');
+const optKeep = (arr, v) => opt(v && !arr.includes(v) ? [v, ...arr] : arr, v);
 const empty = m => `<div class="empty">${m}</div>`;
 const main = h => { $('#main').innerHTML = h; };
+const wardLabel = w => WARD_NAMES[w] ? `${w} · ${WARD_NAMES[w]}` : (w || '');
 
 let store = null; try { store = window.sessionStorage; store.getItem('x'); } catch (e) { store = null; }
 var installEvt = null;   // set when the browser offers "Install app"
@@ -47,6 +56,7 @@ const I = {
   home:'<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
   ann:'<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 9a3 3 0 0 1 0 6M18 6a7 7 0 0 1 0 12"/>',
   int:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18M9 15l2 2 4-4"/>',
+  calling:'<circle cx="10" cy="8" r="4"/><path d="M3 21a7 7 0 0 1 14 0M16 11l2 2 4-4"/>',
   ppl:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 6"/>',
   user:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   out:'<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 16l4-4-4-4M14 12H3"/>',
@@ -63,6 +73,7 @@ const PAGES = [
   { id:'home', label:'Home', icon:'home' },
   { id:'ann', label:'Announcements', icon:'ann' },
   { id:'int', label:'Interviews', icon:'int' },
+  { id:'cal', label:'Callings & releases', icon:'calling' },
   { id:'ppl', label:'People & logins', icon:'ppl', admin:true },
   { id:'acct', label:'My account', icon:'user' }
 ];
@@ -139,7 +150,7 @@ function render() {
   $('#meName').textContent = me.name; $('#meRole').textContent = ROLE[me.role] || '';
   paintAv($('#meAv'), me.name, me.photo);
   paintAv($('#meAvMini'), me.name, me.photo);
-  ({ home:pHome, ann:pAnn, int:pInt, ppl:pPpl, acct:pAcct })[S.page]();
+  ({ home:pHome, ann:pAnn, int:pInt, cal:pCal, ppl:pPpl, acct:pAcct })[S.page]();
 }
 function go(p) { S.page = p; closeMenu(); render(); window.scrollTo(0, 0); }
 
@@ -155,7 +166,7 @@ function openForm(title, body, onSave, extra) {
   form.onsubmit = e => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(form));
-    form.querySelectorAll('input[type=checkbox]').forEach(c => f[c.name] = c.checked);
+    form.querySelectorAll('input[type=checkbox][name]').forEach(c => f[c.name] = c.checked);
     guard($('#fSave'), () => onSave(f));
   };
   if (extra) $('#fExtra').onclick = e => twoStep(e.currentTarget, () => guard($('#fExtra'), extra.fn));
@@ -175,15 +186,17 @@ function pHome() {
   const mine = admin ? open : open.filter(i => i.Interviewer === me.interviewer);
   const upcoming = mine.filter(i => i['Scheduled date'] >= today).sort(byWhen).slice(0, 6);
   const noIv = open.filter(i => !i.Interviewer);
+  const calOpenList = C().rows.filter(calOpen);
+  const myCal = admin ? calOpenList : calOpenList.filter(mineCal);
   const stats = admin ? [
     ['To schedule', open.filter(i => i.Status === 'To Schedule').length, 'warn'],
-    ['Needs an interviewer', noIv.length, 'bad'],
+    ['Needs an interviewer', noIv.length + calOpenList.filter(c => !c.Interviewer).length, 'bad'],
     ['Scheduled next 7 days', open.filter(inWeek).length, 'info'],
-    ['Follow-up', open.filter(i => i.Status === 'Follow-up').length, 'violet']
+    ['Callings in progress', calOpenList.length, 'violet']
   ] : [
     ['My open interviews', mine.length, 'info'],
     ['Next 7 days', mine.filter(inWeek).length, 'ok'],
-    ['Still to schedule', mine.filter(i => i.Status === 'To Schedule').length, 'warn'],
+    ['My callings & releases', myCal.length, 'violet'],
     ['Announcements', d.announcements.length, 'mute']
   ];
   const hr = new Date().getHours(), greet = hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
@@ -206,7 +219,13 @@ function pHome() {
         <div class="sub">${fmtD(a.Posted, { month:'short', day:'numeric' })} · ${esc(a.Audience)}</div>
         <p>${esc(String(a.Body).slice(0, 160))}${String(a.Body).length > 160 ? '…' : ''}</p></div>`).join('') || empty('No announcements yet.')}
     </section>
-  </div>`);
+  </div>
+  ${C().ok && (admin || myCal.length) ? `<section class="card mt">
+    <div class="card-h"><h2>${admin ? 'Callings & releases in progress' : 'My callings & releases'}</h2><button class="link" data-go="cal">View all →</button></div>
+    ${myCal.length ? `<ul class="list">${myCal.slice().sort(byInterview).slice(0, 6).map(c => { const [st, cls] = stage(c); return `<li class="item"><div class="grow"><div class="t">${esc(c.Name)}</div>
+      <div class="sub">${esc(c.Action)}${c.Ward ? ' · ' + esc(c.Ward) : ''}${c.Calling ? ' · ' + esc(c.Calling) : ''}${c['Interview date'] ? ' · ' + fmtD(c['Interview date']) + (c.Time ? ' ' + esc(c.Time) : '') : ''}</div></div>
+      <span class="badge ${cls}">${st}</span></li>`; }).join('')}</ul>` : empty('Nothing in progress.')}
+  </section>` : ''}`);
   document.querySelectorAll('#main [data-assign]').forEach(b => b.onclick = () => intForm(findInt(b.dataset.assign)));
 }
 
@@ -217,7 +236,7 @@ function pInt() {
   const open = d.interviews.filter(OPEN);
   const chip = (v, l, c) => `<button class="chip ${S.f.who === v ? 'on' : ''}" data-w="${esc(v)}">${esc(l)}<span>${c}</span></button>`;
   const per = d.lists.interviewers.map(x => ({ n:x.name, sp:x.role === 'sp', c:open.filter(i => i.Interviewer === x.name).length }));
-  main(`<div class="head"><div><h1>Interviews</h1><p class="muted">${seeAll ? 'All interview requests across the stake' : 'Interviews assigned to you'}</p></div>
+  main(`<div class="head"><div><h1>Interviews</h1><p class="muted">${seeAll ? 'Temple recommend and other interview requests across the stake' : 'Interviews assigned to you'}</p></div>
     ${admin ? '<button class="btn pri" id="newInt">+ New interview</button>' : ''}</div>
   ${seeAll ? `<div class="chips" id="who">${chip('', 'Everyone', open.length)}${chip('__none', 'Needs interviewer', open.filter(i => !i.Interviewer).length)}
     ${per.filter(x => x.sp || x.c).map(x => chip(x.n, x.n, x.c)).join('')}</div>` : ''}
@@ -263,7 +282,7 @@ function intForm(i) {
   const L = S.data.lists;
   openForm(i.ID ? 'Edit interview · ' + i.ID : 'New interview', `
     <div class="grid2"><label>Type<select name="Type">${opt(L.types, i.Type)}</select></label>
-      <label>Ward<select name="Ward"><option value="">—</option>${opt(L.wards, i.Ward)}</select></label></div>
+      <label>Ward<select name="Ward"><option value="">—</option>${L.wards.map(w => `<option value="${esc(w)}" ${w === i.Ward ? 'selected' : ''}>${esc(wardLabel(w))}</option>`).join('')}</select></label></div>
     <label>Member name<input name="Name" required value="${esc(i.Name)}" placeholder="Surname, Given name"></label>
     <label>Purpose / calling<input name="Purpose" value="${esc(i.Purpose)}"></label>
     <label>Interviewer<select name="Interviewer" id="fIv"></select><small class="hint" id="ivHint"></small></label>
@@ -285,6 +304,192 @@ function intForm(i) {
     $('#ivHint').textContent = sp ? 'Temple recommend interviews go to a member of the stake presidency.' : '';
   };
   fill(); $('#dlg [name=Type]').onchange = fill;
+}
+
+/* ---------- CALLINGS & RELEASES ---------- */
+const CAL0 = { ok:false, error:'', rows:[], cols:[], lists:{ actions:[], statuses:[], where:[] } };
+const C = () => (S.data && S.data.callings) || CAL0;
+const hasCol = f => C().cols.includes(f);
+const isRel = c => /releas/i.test(c.Action || '');
+const isCancel = c => /cancel/i.test(c.Status || '');
+const mineCal = c => { const n = S.data.me.interviewer; return !!n && (c.Interviewer === n || c['Set apart by'] === n); };
+const agendaName = n => /,/.test(n) ? (n.split(',').slice(1).join(',').trim() + ' ' + n.split(',')[0].trim()).trim() : String(n || '');
+const findCal = id => C().rows.find(c => c.ID === id);
+const byInterview = (a, b) => (a['Interview date'] || '9999').localeCompare(b['Interview date'] || '9999') || String(a.Name).localeCompare(String(b.Name));
+
+function ivOptions(v) {
+  const L = S.data.lists.interviewers;
+  const groups = [['Stake Presidency', L.filter(x => x.role === 'sp')], ['High Council', L.filter(x => x.role === 'hc')]].filter(g => g[1].length);
+  return '<option value="">— Not assigned yet —</option>' +
+    (v && !L.some(x => x.name === v) ? `<option selected>${esc(v)}</option>` : '') +
+    groups.map(([g, xs]) => `<optgroup label="${g}">${xs.map(x => `<option ${x.name === v ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</optgroup>`).join('');
+}
+
+// Where each calling is in the process
+function stage(c) {
+  if (isCancel(c)) return ['Cancelled', ''];
+  if (c.Accepted === 'No') return [isRel(c) ? 'On hold' : 'Declined', 'bad'];
+  const lcrDone = !hasCol('Recorded in LCR') || isT(c['Recorded in LCR']);
+  if (isRel(c)) {
+    if (c['Sustained date']) return lcrDone ? ['Released', 'ok'] : ['Record in LCR', 'violet'];
+    if (c.Accepted === 'Yes') return ['Ready to present', 'info'];
+  } else {
+    if (c['Set apart date']) return lcrDone ? ['Set apart', 'ok'] : ['Record in LCR', 'violet'];
+    if (c['Sustained date']) return ['To set apart', 'violet'];
+    if (c.Accepted === 'Yes') return ['Ready to sustain', 'info'];
+  }
+  if (!c.Interviewer) return ['Needs interviewer', 'bad'];
+  return [c['Interview date'] ? 'Interview set' : 'To interview', 'warn'];
+}
+const calOpen = c => !['Cancelled', 'Declined', 'Released', 'Set apart'].includes(stage(c)[0]);
+
+function pCal() {
+  const me = S.data.me, admin = me.role === 'admin', hc = me.role === 'hc', cal = C(), F = S.cf;
+  if (hc && F.kind === 'none') F.kind = '';
+  const head = `<div class="head"><div><h1>Callings & releases</h1><p class="muted">${hc ? 'Callings and releases assigned to you' : 'Extending callings, releases, sustaining and setting apart'}</p></div>
+    ${admin && cal.ok ? '<div class="head-acts"><button class="btn" id="agBtn">Build stake agenda</button><button class="btn pri" id="newCal">+ New</button></div>' : ''}</div>`;
+  if (!cal.ok) return main(head + `<div class="card">${empty('The Callings & Releases tab could not be read.<br><span class="sub">' + esc(cal.error || 'Please update the Apps Script backend.') + '</span>')}</div>`);
+
+  const open = cal.rows.filter(calOpen);
+  const kinds = [['', 'All', open.length], ['ext', 'Extend calling', open.filter(c => !isRel(c)).length], ['rel', 'Release', open.filter(isRel).length]];
+  if (!hc) kinds.push(['none', 'Needs interviewer', open.filter(c => !c.Interviewer).length]);
+  main(head + `<div class="chips" id="cKind">${kinds.map(([v, l, n]) => `<button class="chip ${F.kind === v ? 'on' : ''}" data-k="${v}">${l}<span>${n}</span></button>`).join('')}</div>
+  <div class="toolbar"><input id="cq" class="input" placeholder="Search name, ward, calling…" value="${esc(F.q)}">
+    <div class="seg" id="cst">${[['open', 'Open'], ['done', 'Finished'], ['all', 'All']].map(([v, l]) => `<button data-s="${v}" class="${F.view === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+  <div class="card flush"><table class="tbl"><thead><tr><th>Member</th><th>Action</th><th>Ward</th><th>Interviewer</th><th>Interview</th><th>Progress</th><th></th></tr></thead><tbody id="ctb"></tbody></table></div>`);
+
+  $('#cq').oninput = e => { F.q = e.target.value; drawCal(); };
+  $('#cst').onclick = e => { const b = e.target.closest('button'); if (!b) return; F.view = b.dataset.s;
+    $('#cst').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); drawCal(); };
+  $('#cKind').onclick = e => { const b = e.target.closest('.chip'); if (!b) return; F.kind = b.dataset.k;
+    $('#cKind').querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === b)); drawCal(); };
+  if (admin) { $('#newCal').onclick = () => calForm(); $('#agBtn').onclick = agendaForm; }
+  $('#ctb').onclick = e => {
+    const ed = e.target.closest('[data-cedit]'); if (ed) return calForm(findCal(ed.dataset.cedit));
+    const rc = e.target.closest('[data-crec]'); if (rc) return recForm(findCal(rc.dataset.crec));
+  };
+  drawCal();
+}
+
+function drawCal() {
+  const F = S.cf, admin = S.data.me.role === 'admin', q = F.q.toLowerCase();
+  let rows = C().rows.filter(c => F.view === 'all' ? true : F.view === 'open' ? calOpen(c) : !calOpen(c));
+  if (F.kind === 'ext') rows = rows.filter(c => !isRel(c));
+  else if (F.kind === 'rel') rows = rows.filter(isRel);
+  else if (F.kind === 'none') rows = rows.filter(c => !c.Interviewer);
+  if (q) rows = rows.filter(c => [c.Name, c.Ward, wardLabel(c.Ward), c.Calling, c.Action, c.Interviewer, c['Set apart by'], c.Venue].join(' ').toLowerCase().includes(q));
+  rows.sort(byInterview);
+  const short = s => fmtD(s, { month:'short', day:'numeric' });
+  $('#ctb').innerHTML = rows.length ? rows.map(c => {
+    const [st, cls] = stage(c);
+    const dates = [c['Sustained date'] && (isRel(c) ? 'Released ' : 'Sustained ') + short(c['Sustained date']),
+                   c['Set apart date'] && 'Set apart ' + short(c['Set apart date'])].filter(Boolean).join(' · ');
+    const acts = (admin ? `<button class="btn sm" data-cedit="${esc(c.ID)}">Edit</button>` : '') +
+      (mineCal(c) && calOpen(c) ? `<button class="btn sm ok" data-crec="${esc(c.ID)}">Record</button>` : '');
+    return `<tr>
+      <td data-l="Member"><div><b>${esc(c.Name)}</b><div class="sub">${esc(c.Calling || '')}</div></div></td>
+      <td data-l="Action">${esc(c.Action)}</td>
+      <td data-l="Ward"><div>${esc(c.Ward)}${WARD_NAMES[c.Ward] ? `<div class="sub">${esc(WARD_NAMES[c.Ward])}</div>` : ''}</div></td>
+      <td data-l="Interviewer"><div>${c.Interviewer ? esc(c.Interviewer) : '<span class="warn-t">Not assigned</span>'}${!isRel(c) && c['Set apart by'] ? `<div class="sub">Set apart: ${esc(c['Set apart by'])}</div>` : ''}</div></td>
+      <td data-l="Interview"><div>${c['Interview date'] ? `${fmtD(c['Interview date'])}<div class="sub">${esc(c.Time || '')}${c.Venue ? ' · ' + esc(c.Venue) : ''}</div>` : '<span class="muted">Not scheduled</span>'}</div></td>
+      <td data-l="Progress"><div><span class="badge ${cls}">${st}</span>${dates ? `<div class="sub">${dates}</div>` : ''}</div></td>
+      <td class="acts">${acts}</td></tr>`;
+  }).join('') : `<tr><td colspan="7">${empty('No callings match.')}</td></tr>`;
+}
+
+// Add / edit (executive secretary)
+function calForm(c) {
+  const L = C().lists, isNew = !c;
+  c = c || { Action: L.actions.find(a => !/releas/i.test(a)) || L.actions[0] || '', Status: L.statuses[0] || '' };
+  const f = (k, html) => hasCol(k) ? html : '';
+  const yn = (name, v) => `<select name="${name}">${opt(['', 'Yes', 'No'], v)}</select>`;
+  const cancelSt = hasCol('Status') && L.statuses.find(s => /cancel/i.test(s));
+  openForm(isNew ? 'New calling or release' : 'Edit · ' + c.Name, `
+    <div class="grid2"><label>Action<select name="Action">${optKeep(L.actions, c.Action)}</select></label>
+      ${f('Ward', `<label>Ward<select name="Ward"><option value="">—</option>${S.data.lists.wards.map(w => `<option value="${esc(w)}" ${w === c.Ward ? 'selected' : ''}>${esc(wardLabel(w))}</option>`).join('')}</select></label>`)}</div>
+    <label>Member name<input name="Name" required value="${esc(c.Name)}" placeholder="e.g. Kristian Trajano"></label>
+    ${f('Calling', `<label>Calling<input name="Calling" value="${esc(c.Calling)}" placeholder="e.g. Ward Clerk"></label>`)}
+    ${f('Interviewer', `<label>Interviewer<select name="Interviewer">${ivOptions(c.Interviewer)}</select><small class="hint">A member of the stake presidency or high council.</small></label>`)}
+    <div class="grid3">
+      ${f('Interview date', `<label>Interview date<input type="date" name="Interview date" value="${esc(c['Interview date'])}"></label>`)}
+      ${f('Time', `<label>Time<input type="time" name="Time" value="${to24(c.Time)}"></label>`)}
+      ${f('Venue', `<label>Venue<input name="Venue" list="venues" value="${esc(c.Venue)}"></label>`)}</div>
+    ${f('Accepted', `<label>Accepted / agreed${yn('Accepted', c.Accepted)}</label>`)}
+    <div class="grid2">
+      ${f('Sustained date', `<label>Presented on <span class="muted">(sustained or released)</span><input type="date" name="Sustained date" value="${esc(c['Sustained date'])}"></label>`)}
+      ${f('Sustained where', `<label>Where presented<select name="Sustained where">${optKeep(['', ...L.where], c['Sustained where'] || '')}</select></label>`)}</div>
+    <div class="grid2">
+      ${f('Set apart by', `<label>Set apart by <span class="muted">(callings only)</span><select name="Set apart by">${ivOptions(c['Set apart by'])}</select></label>`)}
+      ${f('Set apart date', `<label>Set apart on<input type="date" name="Set apart date" value="${esc(c['Set apart date'])}"></label>`)}</div>
+    <div class="grid2">
+      ${f('Recorded in LCR', `<label>Recorded in LCR${yn('Recorded in LCR', c['Recorded in LCR'])}</label>`)}
+      ${f('Status', `<label>Status<select name="Status">${optKeep(['', ...L.statuses], c.Status || '')}</select></label>`)}</div>
+    ${f('Notes', `<label>Notes <span class="muted">(scheduling only)</span><textarea name="Notes" rows="2">${esc(c.Notes)}</textarea></label>`)}
+    <p class="hint">Never record worthiness, personal or family matters here.</p>`,
+    async v => { if (v.Time !== undefined) v.Time = to12(v.Time); if (c.ID) v.ID = c.ID; await api('saveCalling', v); toast('Saved'); },
+    c.ID && cancelSt && !isCancel(c) ? { label:'Cancel', fn: async () => { await api('saveCalling', { ID:c.ID, Status:cancelSt }); toast('Cancelled'); } } : null);
+}
+
+// Record results (assigned SP / HC)
+function recForm(c) {
+  const L = C().lists, rel = isRel(c), me = S.data.me.interviewer, iv = c.Interviewer === me, setter = c['Set apart by'] === me;
+  const f = (k, html) => hasCol(k) ? html : '';
+  openForm((rel ? 'Release · ' : 'Calling · ') + c.Name, `
+    <p class="hint" style="margin:0 0 14px">${esc(c.Action)}${c.Calling ? ' · ' + esc(c.Calling) : ''}${c.Ward ? ' · ' + esc(wardLabel(c.Ward)) : ''}</p>
+    ${iv ? `<div class="grid2">
+      ${f('Interview date', `<label>Interview date<input type="date" name="Interview date" value="${esc(c['Interview date'] || S.data.today)}"></label>`)}
+      ${f('Accepted', `<label>${rel ? 'Member agreed to the release' : 'Member accepted the calling'}<select name="Accepted">${opt(['', 'Yes', 'No'], c.Accepted)}</select></label>`)}</div>` : ''}
+    ${!rel && (iv || setter) ? f('Set apart date', `<label>Set apart on <span class="muted">(after the sustaining)</span><input type="date" name="Set apart date" value="${esc(c['Set apart date'])}"></label>`) : ''}
+    ${f('Status', `<label>Status<select name="Status">${optKeep(['', ...L.statuses], c.Status || '')}</select></label>`)}
+    <p class="hint">Scheduling only. Never record worthiness, personal or family matters here.</p>`,
+    async v => { await api('recordCalling', Object.assign({ id:c.ID }, v)); toast('Saved'); });
+}
+
+// Stake agenda
+function agendaText(items) {
+  const line = c => `- ${agendaName(c.Name)}${c.Ward ? ' (' + c.Ward + ')' : ''}${c.Calling ? ' – ' + c.Calling : ''}`;
+  const group = list => {
+    const keys = [...new Set(list.map(c => c['Sustained where'] || ''))].sort((a, b) => (a ? 1 : 0) - (b ? 1 : 0) || a.localeCompare(b));
+    return keys.map(k => (k ? k + '\n' : '') + list.filter(c => (c['Sustained where'] || '') === k).map(line).join('\n')).join('\n\n');
+  };
+  const rel = items.filter(isRel), ext = items.filter(c => !isRel(c));
+  return ['STAKE AGENDA', rel.length && 'Release\n' + group(rel), ext.length && 'Sustaining and Set Apart\n' + group(ext)].filter(Boolean).join('\n\n');
+}
+
+function agendaForm() {
+  const pending = C().rows.filter(c => !isCancel(c) && c.Accepted !== 'No' && !c['Sustained date']);
+  if (!pending.length) return toast('Nothing is waiting to be presented.', true);
+  const sun = parseD(S.data.today); sun.setDate(sun.getDate() + (7 - sun.getDay()) % 7);   // coming Sunday
+  const sec = (title, list) => list.length ? `<h4>${title}</h4>` + list.map(c =>
+    `<label class="check"><input type="checkbox" class="pk" value="${esc(c.ID)}" ${c.Accepted === 'Yes' ? 'checked' : ''}>
+     <span>${esc(agendaName(c.Name))}${c.Ward ? ' (' + esc(c.Ward) + ')' : ''}${c.Calling ? ' – ' + esc(c.Calling) : ''}${c.Accepted === 'Yes' ? '' : ' <span class="muted">· not interviewed yet</span>'}</span></label>`).join('') : '';
+  openForm('Build stake agenda', `
+    <p class="hint" style="margin:0 0 10px">Tick the names to present. Those already interviewed are ticked for you.</p>
+    <div class="pick" id="agPick">${sec('Release', pending.filter(isRel))}${sec('Sustaining and set apart', pending.filter(c => !isRel(c)))}</div>
+    <div class="grid2"><label>Meeting date<input type="date" name="date" id="agDate" value="${iso(sun)}"></label>
+      <label>Who can see it<select name="Audience">${opt(S.data.lists.audiences, 'Everyone')}</select></label></div>
+    <label>Title<input name="Title" id="agTitle" required></label>
+    <label>Announcement text <span class="muted">(edit freely before posting)</span><textarea name="Body" id="agText" rows="12"></textarea></label>
+    <button type="button" class="btn sm" id="agCopy">Copy text</button>
+    <label class="check mt"><input type="checkbox" name="mark" checked> Save the meeting date as the sustained / released date for the ticked names</label>`,
+    async f => {
+      const ids = [...document.querySelectorAll('#agPick .pk:checked')].map(x => x.value);
+      if (!ids.length) throw new Error('Tick at least one name.');
+      await api('saveAnnouncement', { Title:f.Title, Body:f.Body, Audience:f.Audience, Pinned:true, Expires:f.date });
+      if (f.mark) await api('markSustained', { ids, date:f.date });
+      toast('Stake agenda posted');
+    });
+  const setTitle = () => { $('#agTitle').value = 'Stake Agenda · ' + fmtD($('#agDate').value, { month:'long', day:'numeric', year:'numeric' }); };
+  const setText = () => {
+    const ids = [...document.querySelectorAll('#agPick .pk:checked')].map(x => x.value);
+    $('#agText').value = agendaText(pending.filter(c => ids.includes(c.ID)));
+  };
+  $('#agPick').onchange = setText; $('#agDate').onchange = setTitle;
+  setTitle(); setText();
+  $('#agCopy').onclick = async () => {
+    try { await navigator.clipboard.writeText($('#agText').value); toast('Copied'); }
+    catch (e) { $('#agText').select(); toast('Press Ctrl+C to copy', true); }
+  };
 }
 
 /* ---------- ANNOUNCEMENTS ---------- */
@@ -382,7 +587,7 @@ function pAcct() {
       <section class="card">
         <h2>Notifications</h2>
         <p class="hint" style="margin-bottom:6px">Emails go to ${esc(me.email)}.</p>
-        <label class="toggle"><span><b>Interviews assigned to me</b><small>An email when an interview is assigned to you, with the time and place.</small></span>
+        <label class="toggle"><span><b>Interviews & callings assigned to me</b><small>An email when an interview, release or setting apart is assigned to you, with the time and place.</small></span>
           <input type="checkbox" id="nAssigned" ${n.assigned ? 'checked' : ''}></label>
         <label class="toggle"><span><b>New announcements</b><small>A copy of each new announcement meant for you.</small></span>
           <input type="checkbox" id="nAnn" ${n.announcements ? 'checked' : ''}></label>
