@@ -264,3 +264,18 @@ dialog::backdrop{background:rgba(7,26,44,.45)}
 .unit.mine{border-color:var(--teal);box-shadow:0 0 0 2px rgba(0,109,143,.15),var(--sh)}
 .unit .person .av{width:40px;height:40px}
 .unit-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:auto;padding-top:10px;border-top:1px solid var(--line)}
+/* Interviews to report (SP & HC) */
+#nav button.hot{background:rgba(224,160,48,.16);color:#fff}
+#nav button.hot.on{background:var(--teal)}
+.nav-badge{margin-left:auto;min-width:22px;height:22px;padding:0 7px;border-radius:999px;background:#e0a030;color:#071a2c;font-size:12px;font-weight:700;display:grid;place-items:center}
+.note.info{background:var(--sky-50);color:#0a4f6b;border-color:#bfe0ee;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.task-row{display:flex;align-items:center;gap:14px}
+.task-row .t{font-weight:600}
+.task-head{display:flex;flex-direction:column;gap:3px;padding:12px 14px;background:var(--sky-50);border-radius:10px;margin-bottom:16px}
+.task-head b{font-size:16px}
+fieldset.opts{border:0;margin:0 0 14px;padding:0;min-width:0}
+fieldset.opts legend{font-weight:600;font-size:13px;color:#344150;margin-bottom:8px;padding:0}
+label.opt{display:flex;align-items:center;gap:10px;margin:0 0 8px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;font-weight:500;font-size:15px;color:var(--ink);cursor:pointer}
+label.opt>input{display:inline-block;width:18px;height:18px;margin:0;padding:0;flex:none;accent-color:var(--teal)}
+label.opt:has(input:checked){border-color:var(--teal);background:var(--sky-50)}
+@media (max-width:640px){.task-row{flex-wrap:wrap}.task-row .btn{width:100%;justify-content:center}}
