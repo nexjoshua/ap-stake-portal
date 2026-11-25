@@ -5,11 +5,11 @@
 const API_URL = 'https://script.google.com/macros/s/AKfycbzu_C7k38r-qqzBmLBl1LqgUbPIN4rzxUup0Go8He8xPxb5SV1BgN3D-84NNKRKOKNC/exec';
 
 // Sidebar quick links. "roles" limits who sees a link (admin = Executive Secretary,
-// sp = Stake Presidency, hc = High Council). Remove "roles" to show it to everyone.
+// sp = Stake Presidency, hc = High Council, clerk = Stake Clerks). Remove "roles" to show it to everyone.
 const LINKS = [
   { label:'Executive Secretary Tracker (MAIN)', url:'https://docs.google.com/spreadsheets/d/1MUhpzICBoNRWM6IKNRv_JzUq_CEG8l6M48ijrKNOHp8/edit?gid=603386809#gid=603386809', icon:'sheet', roles:['admin'] },
   { label:'Stake Presidency View', url:'https://docs.google.com/spreadsheets/d/1UeV0nundDLCrrtZKtiymy6VuXN8T2YwpCstYN96zfH0/edit?gid=1572489677#gid=1572489677', icon:'sheet', roles:['admin','sp'] },
-  { label:'LCR (TR interview requests)', url:'https://lcr.churchofjesuschrist.org/', icon:'lcr', roles:['admin','sp'] },
+  { label:'LCR (TR interview requests)', url:'https://lcr.churchofjesuschrist.org/', icon:'lcr', roles:['admin','sp','clerk'] },
   { label:'Stake email invitation template', url:'https://docs.google.com/document/d/1hvNcEDIkylAy3p3c0bs5snat-EHLuCBF/edit', icon:'doc', roles:['admin'] },
   { label:'2027 Stake Calendar', url:'https://docs.google.com/spreadsheets/d/1YYvVabWY9-H2Qwi1-BVVBWVfyJO0Jx46Quy7XPDWV-c/edit?gid=508604250#gid=508604250', icon:'cal' },
   { label:'SP & HC Assignments', url:'https://docs.google.com/spreadsheets/d/1tf8T3006ijVuC3Rrj3ly72g-6JVm3UQN/edit?gid=738304419#gid=738304419', icon:'sheet' },
@@ -20,15 +20,17 @@ const LINKS = [
 const WARD_NAMES = {
   A1:'Antipolo 1st Ward', A2:'Antipolo 2nd Ward',
   M1:'Masagana 1st Ward', M2:'Masagana 2nd Ward',
-  S1:'San Isidro 1st Ward', S2:'San Isidro 2nd Ward'
+  S1:'San Isidro 1st Ward', S2:'San Isidro 2nd Ward',
+  SI1:'San Isidro 1st Ward', SI2:'San Isidro 2nd Ward'
 };
 
 /* ---------- Basics ---------- */
-const S = { token:null, data:null, page:'home', f:{ q:'', who:'', status:'open' }, cf:{ q:'', view:'open', kind:'' } };
+const S = { token:null, data:null, page:'home',
+  f:{ q:'', who:'', status:'open' }, cf:{ q:'', view:'open', kind:'' }, af:{ q:'', sp:'' } };
 const $ = s => document.querySelector(s);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isT = v => v === true || /^(true|yes)$/i.test(String(v));
-const ROLE = { admin:'Executive Secretary', sp:'Stake Presidency', hc:'High Council' };
+const ROLE = { admin:'Executive Secretary', sp:'Stake Presidency', hc:'High Council', clerk:'Stake Clerk' };
 const OPEN = i => !['Done','Cancelled'].includes(i.Status);
 const BADGE = { 'To Schedule':'warn', 'Scheduled':'info', 'Done':'ok', 'Follow-up':'violet', 'Cancelled':'' };
 const badge = s => `<span class="badge ${BADGE[s] || ''}">${esc(s || '—')}</span>`;
@@ -50,6 +52,12 @@ const to12 = t => { if (!t) return ''; let [h, m] = t.split(':').map(Number); co
 const to24 = t => { const m = String(t || '').match(/(\d{1,2}):(\d{2})\s*([AP]M)/i); if (!m) return ''; let h = +m[1] % 12; if (/p/i.test(m[3])) h += 12; return `${String(h).padStart(2, '0')}:${m[2]}`; };
 const byWhen = (a, b) => { const A = a['Scheduled date'] || '9999', B = b['Scheduled date'] || '9999';
   return A < B ? -1 : A > B ? 1 : (to24(a.Time) || '99').localeCompare(to24(b.Time) || '99'); };
+const tenure = s => {
+  const a = parseD(s), b = parseD(S.data.today); if (!a || !b) return '';
+  let m = (b.getFullYear() - a.getFullYear()) * 12 + b.getMonth() - a.getMonth();
+  if (b.getDate() < a.getDate()) m--;
+  return m < 0 ? '' : `${Math.floor(m / 12)} yr ${m % 12} mo`;
+};
 
 /* ---------- Icons ---------- */
 const I = {
@@ -57,6 +65,7 @@ const I = {
   ann:'<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 9a3 3 0 0 1 0 6M18 6a7 7 0 0 1 0 12"/>',
   int:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18M9 15l2 2 4-4"/>',
   calling:'<circle cx="10" cy="8" r="4"/><path d="M3 21a7 7 0 0 1 14 0M16 11l2 2 4-4"/>',
+  asg:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h4"/>',
   ppl:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 6"/>',
   user:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   out:'<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 16l4-4-4-4M14 12H3"/>',
@@ -74,6 +83,7 @@ const PAGES = [
   { id:'ann', label:'Announcements', icon:'ann' },
   { id:'int', label:'Interviews', icon:'int' },
   { id:'cal', label:'Callings & releases', icon:'calling' },
+  { id:'asg', label:'Assignments', icon:'asg', need:'assignments' },
   { id:'ppl', label:'People & logins', icon:'ppl', admin:true },
   { id:'acct', label:'My account', icon:'user' }
 ];
@@ -137,9 +147,10 @@ function signOut(expired) {
 }
 function render() {
   const d = S.data, me = d.me, admin = me.role === 'admin';
-  if (S.page === 'ppl' && !admin) S.page = 'home';
+  const allowed = p => (!p.admin || admin) && (!p.need || d[p.need]);
+  if (!allowed(PAGES.find(p => p.id === S.page) || {})) S.page = 'home';
   if (me.role === 'hc') S.f.who = '';
-  $('#nav').innerHTML = PAGES.filter(p => !p.admin || admin).map(p =>
+  $('#nav').innerHTML = PAGES.filter(allowed).map(p =>
     `<button data-p="${p.id}" class="${S.page === p.id ? 'on' : ''}">${icon(p.icon)}<span>${p.label}</span></button>`).join('');
   const links = LINKS.filter(l => !l.roles || l.roles.includes(me.role));
   $('#links').innerHTML =
@@ -150,7 +161,7 @@ function render() {
   $('#meName').textContent = me.name; $('#meRole').textContent = ROLE[me.role] || '';
   paintAv($('#meAv'), me.name, me.photo);
   paintAv($('#meAvMini'), me.name, me.photo);
-  ({ home:pHome, ann:pAnn, int:pInt, cal:pCal, ppl:pPpl, acct:pAcct })[S.page]();
+  ({ home:pHome, ann:pAnn, int:pInt, cal:pCal, asg:pAsg, ppl:pPpl, acct:pAcct })[S.page]();
 }
 function go(p) { S.page = p; closeMenu(); render(); window.scrollTo(0, 0); }
 
@@ -180,19 +191,25 @@ async function guard(btn, fn) {
 
 /* ---------- HOME ---------- */
 function pHome() {
-  const d = S.data, me = d.me, admin = me.role === 'admin', today = d.today, wk = addDays(today, 7);
+  const d = S.data, me = d.me, admin = me.role === 'admin', clerk = me.role === 'clerk', all = admin || clerk;
+  const today = d.today, wk = addDays(today, 7);
   const inWeek = i => i['Scheduled date'] && i['Scheduled date'] >= today && i['Scheduled date'] <= wk;
   const open = d.interviews.filter(OPEN);
-  const mine = admin ? open : open.filter(i => i.Interviewer === me.interviewer);
+  const mine = all ? open : open.filter(i => i.Interviewer === me.interviewer);
   const upcoming = mine.filter(i => i['Scheduled date'] >= today).sort(byWhen).slice(0, 6);
   const noIv = open.filter(i => !i.Interviewer);
   const calOpenList = C().rows.filter(calOpen);
-  const myCal = admin ? calOpenList : calOpenList.filter(mineCal);
+  const myCal = all ? calOpenList : calOpenList.filter(mineCal);
   const stats = admin ? [
     ['To schedule', open.filter(i => i.Status === 'To Schedule').length, 'warn'],
     ['Needs an interviewer', noIv.length + calOpenList.filter(c => !c.Interviewer).length, 'bad'],
     ['Scheduled next 7 days', open.filter(inWeek).length, 'info'],
     ['Callings in progress', calOpenList.length, 'violet']
+  ] : clerk ? [
+    ['Open interviews', open.length, 'info'],
+    ['Scheduled next 7 days', open.filter(inWeek).length, 'ok'],
+    ['To record in LCR', calOpenList.filter(c => stage(c)[0] === 'Record in LCR').length, 'violet'],
+    ['Announcements', d.announcements.length, 'mute']
   ] : [
     ['My open interviews', mine.length, 'info'],
     ['Next 7 days', mine.filter(inWeek).length, 'ok'],
@@ -207,7 +224,7 @@ function pHome() {
   <div class="stats">${stats.map(([l, n, c]) => `<div class="stat ${c}"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('')}</div>
   <div class="cols">
     <section class="card">
-      <div class="card-h"><h2>${admin ? 'Upcoming interviews' : 'My upcoming interviews'}</h2><button class="link" data-go="int">View all →</button></div>
+      <div class="card-h"><h2>${all ? 'Upcoming interviews' : 'My upcoming interviews'}</h2><button class="link" data-go="int">View all →</button></div>
       ${upcoming.length ? `<ul class="list">${upcoming.map(item).join('')}</ul>` : empty('Nothing scheduled yet.')}
       ${admin && noIv.length ? `<div class="card-h mt"><h2>Needs an interviewer</h2></div><ul class="list">${noIv.slice(0, 5).map(i =>
         `<li class="item"><div class="grow"><div class="t">${esc(i.Name)}</div><div class="sub">${esc(i.Type)} · ${esc(i.Ward)} · ${esc(i.Purpose)}</div></div>
@@ -220,8 +237,8 @@ function pHome() {
         <p>${esc(String(a.Body).slice(0, 160))}${String(a.Body).length > 160 ? '…' : ''}</p></div>`).join('') || empty('No announcements yet.')}
     </section>
   </div>
-  ${C().ok && (admin || myCal.length) ? `<section class="card mt">
-    <div class="card-h"><h2>${admin ? 'Callings & releases in progress' : 'My callings & releases'}</h2><button class="link" data-go="cal">View all →</button></div>
+  ${C().ok && (all || myCal.length) ? `<section class="card mt">
+    <div class="card-h"><h2>${all ? 'Callings & releases in progress' : 'My callings & releases'}</h2><button class="link" data-go="cal">View all →</button></div>
     ${myCal.length ? `<ul class="list">${myCal.slice().sort(byInterview).slice(0, 6).map(c => { const [st, cls] = stage(c); return `<li class="item"><div class="grow"><div class="t">${esc(c.Name)}</div>
       <div class="sub">${esc(c.Action)}${c.Ward ? ' · ' + esc(c.Ward) : ''}${c.Calling ? ' · ' + esc(c.Calling) : ''}${c['Interview date'] ? ' · ' + fmtD(c['Interview date']) + (c.Time ? ' ' + esc(c.Time) : '') : ''}</div></div>
       <span class="badge ${cls}">${st}</span></li>`; }).join('')}</ul>` : empty('Nothing in progress.')}
@@ -346,13 +363,15 @@ const calOpen = c => !['Cancelled', 'Declined', 'Released', 'Set apart'].include
 function pCal() {
   const me = S.data.me, admin = me.role === 'admin', hc = me.role === 'hc', cal = C(), F = S.cf;
   if (hc && F.kind === 'none') F.kind = '';
-  const head = `<div class="head"><div><h1>Callings & releases</h1><p class="muted">${hc ? 'Callings and releases assigned to you' : 'Extending callings, releases, sustaining and setting apart'}</p></div>
+  const head = `<div class="head"><div><h1>Callings & releases</h1><p class="muted">${hc ? 'Callings and releases assigned to you'
+      : me.role === 'clerk' ? 'Mark each one once it is recorded in LCR' : 'Extending callings, releases, sustaining and setting apart'}</p></div>
     ${admin && cal.ok ? '<div class="head-acts"><button class="btn" id="agBtn">Build stake agenda</button><button class="btn pri" id="newCal">+ New</button></div>' : ''}</div>`;
   if (!cal.ok) return main(head + `<div class="card">${empty('The Callings & Releases tab could not be read.<br><span class="sub">' + esc(cal.error || 'Please update the Apps Script backend.') + '</span>')}</div>`);
 
   const open = cal.rows.filter(calOpen);
   const kinds = [['', 'All', open.length], ['ext', 'Extend calling', open.filter(c => !isRel(c)).length], ['rel', 'Release', open.filter(isRel).length]];
   if (!hc) kinds.push(['none', 'Needs interviewer', open.filter(c => !c.Interviewer).length]);
+  if (hasCol('Recorded in LCR') && (admin || me.role === 'clerk')) kinds.push(['lcr', 'To record in LCR', open.filter(c => stage(c)[0] === 'Record in LCR').length]);
   main(head + `<div class="chips" id="cKind">${kinds.map(([v, l, n]) => `<button class="chip ${F.kind === v ? 'on' : ''}" data-k="${v}">${l}<span>${n}</span></button>`).join('')}</div>
   <div class="toolbar"><input id="cq" class="input" placeholder="Search name, ward, calling…" value="${esc(F.q)}">
     <div class="seg" id="cst">${[['open', 'Open'], ['done', 'Finished'], ['all', 'All']].map(([v, l]) => `<button data-s="${v}" class="${F.view === v ? 'on' : ''}">${l}</button>`).join('')}</div></div>
@@ -364,19 +383,27 @@ function pCal() {
   $('#cKind').onclick = e => { const b = e.target.closest('.chip'); if (!b) return; F.kind = b.dataset.k;
     $('#cKind').querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === b)); drawCal(); };
   if (admin) { $('#newCal').onclick = () => calForm(); $('#agBtn').onclick = agendaForm; }
-  $('#ctb').onclick = e => {
+  $('#ctb').onclick = async e => {
     const ed = e.target.closest('[data-cedit]'); if (ed) return calForm(findCal(ed.dataset.cedit));
     const rc = e.target.closest('[data-crec]'); if (rc) return recForm(findCal(rc.dataset.crec));
+    const lc = e.target.closest('[data-clcr]');
+    if (lc) {
+      lc.disabled = true;
+      try { await api('recordCalling', { id:lc.dataset.clcr, 'Recorded in LCR':'Yes' }); toast('Marked as recorded in LCR'); }
+      catch (err) { lc.disabled = false; toast(err.message, true); }
+    }
   };
   drawCal();
 }
 
 function drawCal() {
-  const F = S.cf, admin = S.data.me.role === 'admin', q = F.q.toLowerCase();
+  const F = S.cf, me = S.data.me, admin = me.role === 'admin', q = F.q.toLowerCase();
+  const canLcr = (admin || me.role === 'clerk') && hasCol('Recorded in LCR');
   let rows = C().rows.filter(c => F.view === 'all' ? true : F.view === 'open' ? calOpen(c) : !calOpen(c));
   if (F.kind === 'ext') rows = rows.filter(c => !isRel(c));
   else if (F.kind === 'rel') rows = rows.filter(isRel);
   else if (F.kind === 'none') rows = rows.filter(c => !c.Interviewer);
+  else if (F.kind === 'lcr') rows = rows.filter(c => stage(c)[0] === 'Record in LCR');
   if (q) rows = rows.filter(c => [c.Name, c.Ward, wardLabel(c.Ward), c.Calling, c.Action, c.Interviewer, c['Set apart by'], c.Venue].join(' ').toLowerCase().includes(q));
   rows.sort(byInterview);
   const short = s => fmtD(s, { month:'short', day:'numeric' });
@@ -385,7 +412,8 @@ function drawCal() {
     const dates = [c['Sustained date'] && (isRel(c) ? 'Released ' : 'Sustained ') + short(c['Sustained date']),
                    c['Set apart date'] && 'Set apart ' + short(c['Set apart date'])].filter(Boolean).join(' · ');
     const acts = (admin ? `<button class="btn sm" data-cedit="${esc(c.ID)}">Edit</button>` : '') +
-      (mineCal(c) && calOpen(c) ? `<button class="btn sm ok" data-crec="${esc(c.ID)}">Record</button>` : '');
+      (mineCal(c) && calOpen(c) && st !== 'Record in LCR' ? `<button class="btn sm ok" data-crec="${esc(c.ID)}">Record</button>` : '') +
+      (canLcr && st === 'Record in LCR' ? `<button class="btn sm ok" data-clcr="${esc(c.ID)}">Recorded in LCR</button>` : '');
     return `<tr>
       <td data-l="Member"><div><b>${esc(c.Name)}</b><div class="sub">${esc(c.Calling || '')}</div></div></td>
       <td data-l="Action">${esc(c.Action)}</td>
@@ -492,6 +520,63 @@ function agendaForm() {
   };
 }
 
+/* ---------- ASSIGNMENTS (secretary, presidency, clerks) ---------- */
+function pAsg() {
+  const A = S.data.assignments, admin = S.data.me.role === 'admin', F = S.af, today = S.data.today;
+  const spName = v => { const L = A.leadership.find(x => x.interviewer && x.interviewer === v); return L ? L.name : v; };
+  const sps = [...new Set(A.councilors.map(c => c.SP).filter(Boolean))];
+  const unitHc = w => A.councilors.find(c => c.Unit === w);
+  const topic = (A.speaking.find(s => s[1]) || [])[1] || '';
+  const next = A.speaking.find(s => parseD(s[0]) && s[0] >= today);
+  const dateTxt = s => parseD(s) ? fmtD(s, { weekday:'short', month:'short', day:'numeric', year:'numeric' }) : esc(s);
+  main(`<div class="head"><div><h1>Assignments</h1><p class="muted">Stake leadership, high council assignments and Sunday schedules</p></div></div>
+  ${admin && A.snap.length ? `<div class="note">Some parts are showing a saved copy because they couldn't be read from the High Council tab${A.error ? ' (' + esc(A.error) + ')' : ''}. Run <b>checkAssignments</b> in Apps Script to see what was found.</div>` : ''}
+  <section class="card"><h2>Stake presidency & clerks</h2>
+    <div class="lead mt">${A.leadership.map(p => `<div class="ld">${avatar(p.name, p.photo)}<div><b>${esc(p.name)}</b><span class="sub">${esc(p.title)}</span></div></div>`).join('')}</div>
+  </section>
+  <div class="head mt"><div><h2>High council</h2></div></div>
+  <div class="chips" id="aSp"><button class="chip ${!F.sp ? 'on' : ''}" data-sp="">All<span>${A.councilors.length}</span></button>
+    ${sps.map(s => `<button class="chip ${F.sp === s ? 'on' : ''}" data-sp="${esc(s)}">${esc(spName(s))}<span>${A.councilors.filter(c => c.SP === s).length}</span></button>`).join('')}</div>
+  <div class="toolbar"><input id="aq" class="input" placeholder="Search name, unit, assignment…" value="${esc(F.q)}"></div>
+  <div class="card flush"><table class="tbl"><thead><tr><th>#</th><th>High councilor</th><th>Unit</th><th>Assignment</th><th>Auditor</th><th>Sustained</th><th>Presidency</th></tr></thead><tbody id="atb"></tbody></table></div>
+  <div class="cols3 mt">
+    <section class="card"><h2>Sunday schedule</h2>
+      <ul class="list mt">${A.schedule.map(([w, t]) => { const h = unitHc(w); return `<li class="item"><span class="badge info">${esc(t)}</span>
+        <div class="grow"><div class="t">${esc(wardLabel(w))}</div><div class="sub">${h ? 'High councilor: ' + esc(h.Name) : 'No high councilor assigned'}</div></div></li>`; }).join('') || empty('No schedule yet.')}</ul>
+    </section>
+    <section class="card"><h2>Speaking assignments</h2><p class="sub" style="margin:4px 0 0">Every 3rd Sunday of the quarter${topic ? ' · ' + esc(topic) : ''}</p>
+      <ul class="list mt">${A.speaking.map(([d]) => { const past = parseD(d) && d < today, isNext = next && next[0] === d;
+        return `<li class="item"><div class="grow"><div class="t">${dateTxt(d)}</div></div>${isNext ? '<span class="badge info">Next</span>' : past ? '<span class="badge">Done</span>' : ''}</li>`; }).join('') || empty('No dates yet.')}</ul>
+      ${!next && A.speaking.length ? '<p class="hint">All listed dates have passed. Add next year\'s dates to the High Council tab.</p>' : ''}
+    </section>
+    <section class="card"><h2>Audit committee</h2>
+      <ul class="list mt">${A.audit.map(([n, r]) => `<li class="item">${avatar(n, '', 'sm')}<div class="grow"><div class="t">${esc(n)}</div><div class="sub">${esc(r)}</div></div></li>`).join('') || empty('No members listed.')}</ul>
+    </section>
+  </div>`);
+  $('#aq').oninput = e => { F.q = e.target.value; drawAsg(); };
+  $('#aSp').onclick = e => { const b = e.target.closest('.chip'); if (!b) return; F.sp = b.dataset.sp;
+    $('#aSp').querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === b)); drawAsg(); };
+  drawAsg();
+}
+function drawAsg() {
+  const A = S.data.assignments, F = S.af, q = F.q.toLowerCase();
+  const spName = v => { const L = A.leadership.find(x => x.interviewer && x.interviewer === v); return L ? L.name : v; };
+  let rows = A.councilors.slice();
+  if (F.sp) rows = rows.filter(c => c.SP === F.sp);
+  if (q) rows = rows.filter(c => [c.Name, c.Unit, wardLabel(c.Unit), c.Assignment, c.Auditor, c.SP, spName(c.SP)].join(' ').toLowerCase().includes(q));
+  $('#atb').innerHTML = rows.length ? rows.map(c => {
+    const sus = parseD(c.Sustained);
+    return `<tr>
+      <td data-l="#">${esc(c.No)}</td>
+      <td data-l="High councilor"><b>${esc(c.Name)}</b></td>
+      <td data-l="Unit"><div>${c.Unit ? esc(c.Unit) + (WARD_NAMES[c.Unit] ? `<div class="sub">${esc(WARD_NAMES[c.Unit])}</div>` : '') : '<span class="muted">—</span>'}</div></td>
+      <td data-l="Assignment">${esc(c.Assignment) || '<span class="muted">—</span>'}</td>
+      <td data-l="Auditor">${c.Auditor ? `<span class="badge">${esc(c.Auditor)}</span>` : '<span class="muted">—</span>'}</td>
+      <td data-l="Sustained"><div>${sus ? fmtD(c.Sustained, { month:'short', day:'numeric', year:'numeric' }) : esc(c.Sustained || '—')}<div class="sub">${esc(sus ? tenure(c.Sustained) : c.Tenure)}</div></div></td>
+      <td data-l="Presidency">${esc(spName(c.SP)) || '<span class="muted">—</span>'}</td></tr>`;
+  }).join('') : `<tr><td colspan="7">${empty('No high councilors match.')}</td></tr>`;
+}
+
 /* ---------- ANNOUNCEMENTS ---------- */
 function pAnn() {
   const d = S.data, admin = d.me.role === 'admin';
@@ -550,8 +635,8 @@ function userForm(u) {
   u = u || { role:'hc', active:true };
   openForm(u.row ? 'Edit person' : 'Add person', `
     <label>Full name<input name="name" required value="${esc(u.name)}"></label>
-    <div class="grid2"><label>Role<select name="role">${['sp', 'hc', 'admin'].map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLE[r]}</option>`).join('')}</select></label>
-      <label>Interviewer name<input name="interviewer" value="${esc(u.interviewer)}" placeholder="e.g. Bro. Acosta"><small class="hint">Leave blank if not an interviewer.</small></label></div>
+    <div class="grid2"><label>Role<select name="role">${['sp', 'hc', 'clerk', 'admin'].map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLE[r]}</option>`).join('')}</select></label>
+      <label>Interviewer name<input name="interviewer" value="${esc(u.interviewer)}" placeholder="e.g. Bro. Acosta"><small class="hint">Leave blank if not an interviewer (e.g. clerks).</small></label></div>
     <label>Email (used to sign in and for notifications)<input type="email" name="email" value="${esc(u.email)}"></label>
     <label class="check"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}> Allow this person to sign in</label>`,
     async f => { f.row = u.row || null; await api('saveUser', f); toast('Saved'); });
