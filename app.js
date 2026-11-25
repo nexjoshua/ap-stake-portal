@@ -39,6 +39,11 @@ const optKeep = (arr, v) => opt(v && !arr.includes(v) ? [v, ...arr] : arr, v);
 const empty = m => `<div class="empty">${m}</div>`;
 const main = h => { $('#main').innerHTML = h; };
 const wardLabel = w => WARD_NAMES[w] ? `${w} · ${WARD_NAMES[w]}` : (w || '');
+// "SI1" and "S1" are the same ward
+const unitKey = u => String(u || '').toUpperCase().replace(/\s+/g, '').replace(/^SI(\d+)$/, 'S$1');
+const unitFor = w => ((S.data && S.data.units && S.data.units.list) || []).find(u => u.key === unitKey(w));
+// "Acosta, Jacquiri Joy" → "Jacquiri Acosta" (for initials)
+const hcShort = n => { const [s, g] = String(n || '').split(','); return g ? g.trim().split(/\s+/)[0] + ' ' + s.trim() : String(n || ''); };
 
 let store = null; try { store = window.sessionStorage; store.getItem('x'); } catch (e) { store = null; }
 var installEvt = null;   // set when the browser offers "Install app"
@@ -65,6 +70,7 @@ const I = {
   ann:'<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15 9a3 3 0 0 1 0 6M18 6a7 7 0 0 1 0 12"/>',
   int:'<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18M9 15l2 2 4-4"/>',
   calling:'<circle cx="10" cy="8" r="4"/><path d="M3 21a7 7 0 0 1 14 0M16 11l2 2 4-4"/>',
+  units:'<path d="M3 21h18M5 21V9l7-5 7 5v12M9 21v-6h6v6"/>',
   asg:'<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M9 10h6M9 14h6M9 18h4"/>',
   ppl:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 6"/>',
   user:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
@@ -83,6 +89,7 @@ const PAGES = [
   { id:'ann', label:'Announcements', icon:'ann' },
   { id:'int', label:'Interviews', icon:'int' },
   { id:'cal', label:'Callings & releases', icon:'calling' },
+  { id:'units', label:'High council & units', icon:'units', need:'units' },
   { id:'asg', label:'Assignments', icon:'asg', need:'assignments' },
   { id:'ppl', label:'People & logins', icon:'ppl', admin:true },
   { id:'acct', label:'My account', icon:'user' }
@@ -124,7 +131,7 @@ async function api(action, payload) {
 }
 function toast(m, bad) {
   const t = $('#toast'); t.textContent = m; t.className = 'toast show' + (bad ? ' bad' : '');
-  clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', 2600);
+  clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', 3200);
 }
 function twoStep(btn, fn) {
   if (btn.dataset.armed) { delete btn.dataset.armed; return fn(); }
@@ -161,7 +168,7 @@ function render() {
   $('#meName').textContent = me.name; $('#meRole').textContent = ROLE[me.role] || '';
   paintAv($('#meAv'), me.name, me.photo);
   paintAv($('#meAvMini'), me.name, me.photo);
-  ({ home:pHome, ann:pAnn, int:pInt, cal:pCal, asg:pAsg, ppl:pPpl, acct:pAcct })[S.page]();
+  ({ home:pHome, ann:pAnn, int:pInt, cal:pCal, units:pUnits, asg:pAsg, ppl:pPpl, acct:pAcct })[S.page]();
 }
 function go(p) { S.page = p; closeMenu(); render(); window.scrollTo(0, 0); }
 
@@ -200,6 +207,7 @@ function pHome() {
   const noIv = open.filter(i => !i.Interviewer);
   const calOpenList = C().rows.filter(calOpen);
   const myCal = all ? calOpenList : calOpenList.filter(mineCal);
+  const myUnit = me.interviewer && ((d.units && d.units.list) || []).find(u => u.interviewer === me.interviewer);
   const stats = admin ? [
     ['To schedule', open.filter(i => i.Status === 'To Schedule').length, 'warn'],
     ['Needs an interviewer', noIv.length + calOpenList.filter(c => !c.Interviewer).length, 'bad'],
@@ -220,7 +228,8 @@ function pHome() {
   const item = i => `<li class="item"><div class="when"><b>${fmtD(i['Scheduled date'], { day:'numeric' })}</b><span>${fmtD(i['Scheduled date'], { month:'short' })}</span></div>
     <div class="grow"><div class="t">${esc(i.Name)}</div><div class="sub">${esc(i.Type)} · ${esc(i.Ward)} · ${esc(i.Time || 'Time TBD')}${i.Venue ? ' · ' + esc(i.Venue) : ''}</div></div>
     <div class="sub r">${esc(i.Interviewer || 'Unassigned')}</div></li>`;
-  main(`<div class="head"><div><p class="eyebrow">${fmtD(today, { weekday:'long', month:'long', day:'numeric', year:'numeric' })}</p><h1>${greet}, ${esc(me.name)}</h1></div></div>
+  main(`<div class="head"><div><p class="eyebrow">${fmtD(today, { weekday:'long', month:'long', day:'numeric', year:'numeric' })}</p><h1>${greet}, ${esc(me.name)}</h1>
+    ${myUnit ? `<p class="muted">Your assigned unit: <b>${esc(wardLabel(myUnit.code))}</b>${myUnit.time ? ' · meets at ' + esc(myUnit.time) : ''}</p>` : ''}</div></div>
   <div class="stats">${stats.map(([l, n, c]) => `<div class="stat ${c}"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('')}</div>
   <div class="cols">
     <section class="card">
@@ -360,12 +369,21 @@ function stage(c) {
 }
 const calOpen = c => !['Cancelled', 'Declined', 'Released', 'Set apart'].includes(stage(c)[0]);
 
+// Gives open callings without an interviewer their unit's high councilor
+async function autoFill(btn) {
+  if (btn) btn.disabled = true;
+  try { const r = await api('autoAssign'); toast(r.info || 'Done'); }
+  catch (e) { toast(e.message, true); }
+  finally { if (btn) btn.disabled = false; }
+}
+
 function pCal() {
   const me = S.data.me, admin = me.role === 'admin', hc = me.role === 'hc', cal = C(), F = S.cf;
   if (hc && F.kind === 'none') F.kind = '';
   const head = `<div class="head"><div><h1>Callings & releases</h1><p class="muted">${hc ? 'Callings and releases assigned to you'
       : me.role === 'clerk' ? 'Mark each one once it is recorded in LCR' : 'Extending callings, releases, sustaining and setting apart'}</p></div>
-    ${admin && cal.ok ? '<div class="head-acts"><button class="btn" id="agBtn">Build stake agenda</button><button class="btn pri" id="newCal">+ New</button></div>' : ''}</div>`;
+    ${admin && cal.ok ? `<div class="head-acts"><button class="btn" id="fillBtn" title="Give each open calling without an interviewer its ward's assigned high councilor">Fill interviewers from units</button>
+      <button class="btn" id="agBtn">Build stake agenda</button><button class="btn pri" id="newCal">+ New</button></div>` : ''}</div>`;
   if (!cal.ok) return main(head + `<div class="card">${empty('The Callings & Releases tab could not be read.<br><span class="sub">' + esc(cal.error || 'Please update the Apps Script backend.') + '</span>')}</div>`);
 
   const open = cal.rows.filter(calOpen);
@@ -382,7 +400,7 @@ function pCal() {
     $('#cst').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); drawCal(); };
   $('#cKind').onclick = e => { const b = e.target.closest('.chip'); if (!b) return; F.kind = b.dataset.k;
     $('#cKind').querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === b)); drawCal(); };
-  if (admin) { $('#newCal').onclick = () => calForm(); $('#agBtn').onclick = agendaForm; }
+  if (admin) { $('#newCal').onclick = () => calForm(); $('#agBtn').onclick = agendaForm; $('#fillBtn').onclick = e => autoFill(e.currentTarget); }
   $('#ctb').onclick = async e => {
     const ed = e.target.closest('[data-cedit]'); if (ed) return calForm(findCal(ed.dataset.cedit));
     const rc = e.target.closest('[data-crec]'); if (rc) return recForm(findCal(rc.dataset.crec));
@@ -409,6 +427,7 @@ function drawCal() {
   const short = s => fmtD(s, { month:'short', day:'numeric' });
   $('#ctb').innerHTML = rows.length ? rows.map(c => {
     const [st, cls] = stage(c);
+    const u = !c.Interviewer && unitFor(c.Ward);
     const dates = [c['Sustained date'] && (isRel(c) ? 'Released ' : 'Sustained ') + short(c['Sustained date']),
                    c['Set apart date'] && 'Set apart ' + short(c['Set apart date'])].filter(Boolean).join(' · ');
     const acts = (admin ? `<button class="btn sm" data-cedit="${esc(c.ID)}">Edit</button>` : '') +
@@ -418,14 +437,15 @@ function drawCal() {
       <td data-l="Member"><div><b>${esc(c.Name)}</b><div class="sub">${esc(c.Calling || '')}</div></div></td>
       <td data-l="Action">${esc(c.Action)}</td>
       <td data-l="Ward"><div>${esc(c.Ward)}${WARD_NAMES[c.Ward] ? `<div class="sub">${esc(WARD_NAMES[c.Ward])}</div>` : ''}</div></td>
-      <td data-l="Interviewer"><div>${c.Interviewer ? esc(c.Interviewer) : '<span class="warn-t">Not assigned</span>'}${!isRel(c) && c['Set apart by'] ? `<div class="sub">Set apart: ${esc(c['Set apart by'])}</div>` : ''}</div></td>
+      <td data-l="Interviewer"><div>${c.Interviewer ? esc(c.Interviewer)
+        : `<span class="warn-t">Not assigned</span>${u && u.interviewer ? `<div class="sub">Unit HC: ${esc(u.interviewer)}</div>` : ''}`}${!isRel(c) && c['Set apart by'] ? `<div class="sub">Set apart: ${esc(c['Set apart by'])}</div>` : ''}</div></td>
       <td data-l="Interview"><div>${c['Interview date'] ? `${fmtD(c['Interview date'])}<div class="sub">${esc(c.Time || '')}${c.Venue ? ' · ' + esc(c.Venue) : ''}</div>` : '<span class="muted">Not scheduled</span>'}</div></td>
       <td data-l="Progress"><div><span class="badge ${cls}">${st}</span>${dates ? `<div class="sub">${dates}</div>` : ''}</div></td>
       <td class="acts">${acts}</td></tr>`;
   }).join('') : `<tr><td colspan="7">${empty('No callings match.')}</td></tr>`;
 }
 
-// Add / edit (executive secretary)
+// Add / edit (executive secretary). Choosing a ward fills in its assigned high councilor.
 function calForm(c) {
   const L = C().lists, isNew = !c;
   c = c || { Action: L.actions.find(a => !/releas/i.test(a)) || L.actions[0] || '', Status: L.statuses[0] || '' };
@@ -437,7 +457,7 @@ function calForm(c) {
       ${f('Ward', `<label>Ward<select name="Ward"><option value="">—</option>${S.data.lists.wards.map(w => `<option value="${esc(w)}" ${w === c.Ward ? 'selected' : ''}>${esc(wardLabel(w))}</option>`).join('')}</select></label>`)}</div>
     <label>Member name<input name="Name" required value="${esc(c.Name)}" placeholder="e.g. Kristian Trajano"></label>
     ${f('Calling', `<label>Calling<input name="Calling" value="${esc(c.Calling)}" placeholder="e.g. Ward Clerk"></label>`)}
-    ${f('Interviewer', `<label>Interviewer<select name="Interviewer">${ivOptions(c.Interviewer)}</select><small class="hint">A member of the stake presidency or high council.</small></label>`)}
+    ${f('Interviewer', `<label>Interviewer<select name="Interviewer">${ivOptions(c.Interviewer)}</select><small class="hint" id="ivAuto"></small></label>`)}
     <div class="grid3">
       ${f('Interview date', `<label>Interview date<input type="date" name="Interview date" value="${esc(c['Interview date'])}"></label>`)}
       ${f('Time', `<label>Time<input type="time" name="Time" value="${to24(c.Time)}"></label>`)}
@@ -456,6 +476,21 @@ function calForm(c) {
     <p class="hint">Never record worthiness, personal or family matters here.</p>`,
     async v => { if (v.Time !== undefined) v.Time = to12(v.Time); if (c.ID) v.ID = c.ID; await api('saveCalling', v); toast('Saved'); },
     c.ID && cancelSt && !isCancel(c) ? { label:'Cancel', fn: async () => { await api('saveCalling', { ID:c.ID, Status:cancelSt }); toast('Cancelled'); } } : null);
+
+  // Auto-fill the unit's high councilor as interviewer
+  const wSel = $('#dlg [name=Ward]'), iSel = $('#dlg [name=Interviewer]'), hint = $('#ivAuto');
+  if (wSel && iSel && hint) {
+    let auto = '';
+    const apply = set => {
+      const u = unitFor(wSel.value), ivn = u && u.interviewer;
+      if (set && ivn && (!iSel.value || iSel.value === auto) && [...iSel.options].some(o => o.value === ivn)) { iSel.value = ivn; auto = ivn; }
+      hint.textContent = !wSel.value ? 'Choose a ward to fill in its assigned high councilor.'
+        : u && u.hc ? `${ivn || u.hc} is assigned to ${u.code}. Choose someone else if he isn't available that day.`
+        : 'No high councilor is assigned to this ward. Pick an interviewer.';
+    };
+    wSel.onchange = () => apply(true);
+    apply(isNew);
+  }
 }
 
 // Record results (assigned SP / HC)
@@ -488,9 +523,12 @@ function agendaForm() {
   const pending = C().rows.filter(c => !isCancel(c) && c.Accepted !== 'No' && !c['Sustained date']);
   if (!pending.length) return toast('Nothing is waiting to be presented.', true);
   const sun = parseD(S.data.today); sun.setDate(sun.getDate() + (7 - sun.getDay()) % 7);   // coming Sunday
-  const sec = (title, list) => list.length ? `<h4>${title}</h4>` + list.map(c =>
-    `<label class="check"><input type="checkbox" class="pk" value="${esc(c.ID)}" ${c.Accepted === 'Yes' ? 'checked' : ''}>
-     <span>${esc(agendaName(c.Name))}${c.Ward ? ' (' + esc(c.Ward) + ')' : ''}${c.Calling ? ' – ' + esc(c.Calling) : ''}${c.Accepted === 'Yes' ? '' : ' <span class="muted">· not interviewed yet</span>'}</span></label>`).join('') : '';
+  const sec = (title, list) => list.length ? `<h4>${title}</h4>` + list.map(c => {
+    const iv = c.Interviewer || ((unitFor(c.Ward) || {}).interviewer ? unitFor(c.Ward).interviewer + ' (unit HC)' : '');
+    return `<label class="check"><input type="checkbox" class="pk" value="${esc(c.ID)}" ${c.Accepted === 'Yes' ? 'checked' : ''}>
+     <span>${esc(agendaName(c.Name))}${c.Ward ? ' (' + esc(c.Ward) + ')' : ''}${c.Calling ? ' – ' + esc(c.Calling) : ''}
+     <span class="muted">· ${iv ? esc(iv) : 'no interviewer'}${c.Accepted === 'Yes' ? '' : ' · not interviewed yet'}</span></span></label>`;
+  }).join('') : '';
   openForm('Build stake agenda', `
     <p class="hint" style="margin:0 0 10px">Tick the names to present. Those already interviewed are ticked for you.</p>
     <div class="pick" id="agPick">${sec('Release', pending.filter(isRel))}${sec('Sustaining and set apart', pending.filter(c => !isRel(c)))}</div>
@@ -520,12 +558,51 @@ function agendaForm() {
   };
 }
 
+/* ---------- HIGH COUNCIL & UNITS ---------- */
+function pUnits() {
+  const U = S.data.units || { list:[], hcs:[], readOnly:true }, me = S.data.me, admin = me.role === 'admin';
+  const open = C().rows.filter(calOpen);
+  const free = U.hcs.filter(h => !h.unit);
+  main(`<div class="head"><div><h1>High council & units</h1><p class="muted">The high councilor assigned to a ward interviews its releases and callings unless you choose someone else</p></div>
+    ${admin && C().ok ? '<button class="btn pri" id="fillBtn">Fill interviewers from units</button>' : ''}</div>
+  ${admin && U.readOnly ? '<div class="note">The High Council tab could not be read, so units can\'t be changed here. Run <b>checkAssignments</b> in Apps Script.</div>' : ''}
+  <div class="units">${U.list.map(u => {
+    const n = open.filter(c => unitKey(c.Ward) === u.key).length;
+    const mine = me.interviewer && u.interviewer === me.interviewer;
+    return `<section class="card unit${mine ? ' mine' : ''}">
+      <div class="card-h"><div><h2>${esc(wardLabel(u.code))}</h2>${u.time ? `<span class="sub">Sunday meeting · ${esc(u.time)}</span>` : ''}</div>
+        ${admin && !U.readOnly ? `<button class="btn sm" data-unit="${esc(u.key)}">Change</button>` : ''}</div>
+      ${u.hc ? `<div class="person">${avatar(hcShort(u.hc), '')}<div><b>${esc(u.hc)}</b><div class="sub">${u.interviewer ? 'Interviews as ' + esc(u.interviewer) : '<span class="warn-t">No matching interviewer in People & logins</span>'}</div></div></div>`
+             : '<p class="warn-t" style="margin:6px 0">No high councilor assigned</p>'}
+      <div class="unit-foot">${u.spName ? `<span class="sub">Presidency: ${esc(u.spName)}</span>` : '<span></span>'}
+        <button class="link" data-go="cal">${n} open calling${n === 1 ? '' : 's'} →</button></div>
+    </section>`; }).join('') || empty('No units found.')}</div>
+  ${free.length ? `<div class="head mt"><div><h2>High councilors without a unit</h2></div></div>
+    <div class="card"><ul class="list">${free.map(h => `<li class="item">${avatar(hcShort(h.name), '', 'sm')}<div class="grow"><div class="t">${esc(h.name)}</div>
+      <div class="sub">${esc(h.assignment || '')}</div></div><span class="sub">${esc(h.interviewer || '')}</span></li>`).join('')}</ul></div>` : ''}`);
+  if ($('#fillBtn')) $('#fillBtn').onclick = e => autoFill(e.currentTarget);
+  document.querySelectorAll('#main [data-unit]').forEach(b => b.onclick = () => unitForm(U.list.find(u => u.key === b.dataset.unit)));
+}
+
+function unitForm(u) {
+  const U = S.data.units;
+  openForm('Assigned high councilor · ' + wardLabel(u.code), `
+    <label>High councilor<select name="name"><option value="">— None —</option>${U.hcs.map(h =>
+      `<option value="${esc(h.name)}" ${h.name === u.hc ? 'selected' : ''}>${esc(h.name)}${h.unit && unitKey(h.unit) !== u.key ? ' (now ' + esc(h.unit) + ')' : ''}</option>`).join('')}</select></label>
+    <p class="hint">This updates the Assigned Unit column on the High Council tab. Moving someone from another unit leaves that unit without a high councilor.</p>
+    <label class="check mt"><input type="checkbox" name="fill" checked> Also make him the interviewer for open callings in this unit that don't have one yet</label>`,
+    async f => {
+      await api('setUnitHc', { unit:u.code, label:u.sheetCode || u.code, name:f.name });
+      if (f.fill && f.name) { const r = await api('autoAssign'); toast(r.info || 'Saved'); } else toast('Unit updated');
+    });
+}
+
 /* ---------- ASSIGNMENTS (secretary, presidency, clerks) ---------- */
 function pAsg() {
   const A = S.data.assignments, admin = S.data.me.role === 'admin', F = S.af, today = S.data.today;
   const spName = v => { const L = A.leadership.find(x => x.interviewer && x.interviewer === v); return L ? L.name : v; };
   const sps = [...new Set(A.councilors.map(c => c.SP).filter(Boolean))];
-  const unitHc = w => A.councilors.find(c => c.Unit === w);
+  const unitHc = w => A.councilors.find(c => unitKey(c.Unit) === unitKey(w));
   const topic = (A.speaking.find(s => s[1]) || [])[1] || '';
   const next = A.speaking.find(s => parseD(s[0]) && s[0] >= today);
   const dateTxt = s => parseD(s) ? fmtD(s, { weekday:'short', month:'short', day:'numeric', year:'numeric' }) : esc(s);
@@ -567,7 +644,7 @@ function drawAsg() {
   $('#atb').innerHTML = rows.length ? rows.map(c => {
     const sus = parseD(c.Sustained);
     return `<tr>
-      <td data-l="#">${esc(c.No)}</td>
+      <td data-l="#">${esc(c.No || (A.councilors.indexOf(c) + 1))}</td>
       <td data-l="High councilor"><b>${esc(c.Name)}</b></td>
       <td data-l="Unit"><div>${c.Unit ? esc(c.Unit) + (WARD_NAMES[c.Unit] ? `<div class="sub">${esc(WARD_NAMES[c.Unit])}</div>` : '') : '<span class="muted">—</span>'}</div></td>
       <td data-l="Assignment">${esc(c.Assignment) || '<span class="muted">—</span>'}</td>
