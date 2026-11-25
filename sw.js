@@ -1,5 +1,5 @@
-/* AP Stake Portal – app helper (offline shell only; never stores portal data) */
-const CACHE = 'apstake-v6';   // change this number whenever you upload new files
+/* AP Stake Portal – app helper (offline shell + notifications; never stores portal data) */
+const CACHE = 'apstake-v7';   // change this number whenever you upload new files
 const SHELL = ['./', './index.html', './styles.css', './app.js', './favicon.svg',
                './icon-192.png', './icon-512.png', './manifest.webmanifest'];
 
@@ -24,4 +24,13 @@ self.addEventListener('fetch', e => {
       .then(res => { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); return res; })
       .catch(() => caches.match(req, { ignoreSearch: true }).then(r => r || caches.match('./index.html')))
   );
+});
+
+// Tapping a notification opens (or brings forward) the portal
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(wins => {
+    const w = wins.find(x => 'focus' in x);
+    return w ? w.focus() : self.clients.openWindow('./');
+  }));
 });
